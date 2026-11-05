@@ -9,11 +9,13 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.salman.ibrah",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "ইবরা অ্যাপে আপনার ব্যক্তিগত উপলব্ধি ও লার্নিং ভয়েস রেকর্ড করার জন্য মাইক্রোফোন পারমিশন প্রয়োজন।"
       }
     },
     "android": {
+      "package": "com.salman.ibrah",
       "adaptiveIcon": {
         "backgroundColor": "#0F382E",
         "foregroundImage": "./assets/android-icon-foreground.png",
