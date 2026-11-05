@@ -80,10 +80,12 @@ export class SecurityService {
   }
 
   /**
-   * Retrieve Gemini API Key securely
+   * Retrieve Gemini API Key securely (falls back to EXPO_PUBLIC_GEMINI_API_KEY if present)
    */
   static async getApiKey(): Promise<string | null> {
-    return await getSecureItem(GEMINI_API_KEY_STORAGE);
+    const stored = await getSecureItem(GEMINI_API_KEY_STORAGE);
+    if (stored) return stored;
+    return process.env.EXPO_PUBLIC_GEMINI_API_KEY || null;
   }
 
   /**
@@ -103,11 +105,11 @@ export class SecurityService {
   }
 
   /**
-   * Get Supabase Cloud Configuration
+   * Get Supabase Cloud Configuration (falls back to EXPO_PUBLIC_SUPABASE_* if present)
    */
   static async getSupabaseConfig(): Promise<{ url: string | null; anonKey: string | null }> {
-    const url = await getSecureItem(SUPABASE_URL_STORAGE);
-    const anonKey = await getSecureItem(SUPABASE_ANON_KEY_STORAGE);
+    const url = (await getSecureItem(SUPABASE_URL_STORAGE)) || process.env.EXPO_PUBLIC_SUPABASE_URL || null;
+    const anonKey = (await getSecureItem(SUPABASE_ANON_KEY_STORAGE)) || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || null;
     return { url, anonKey };
   }
 
@@ -128,10 +130,12 @@ export class SecurityService {
   }
 
   /**
-   * Get Sync User ID
+   * Get Sync User ID (falls back to EXPO_PUBLIC_SYNC_KEY if present)
    */
   static async getSyncUserId(): Promise<string | null> {
-    return await getSecureItem(SYNC_USER_ID_STORAGE);
+    const stored = await getSecureItem(SYNC_USER_ID_STORAGE);
+    if (stored) return stored;
+    return process.env.EXPO_PUBLIC_SYNC_KEY || null;
   }
 
   /**

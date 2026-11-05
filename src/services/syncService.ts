@@ -318,8 +318,8 @@ CREATE TABLE IF NOT EXISTS reflections (
   audio_uri TEXT,
   audio_duration_seconds REAL DEFAULT 0,
   is_favorite BOOLEAN DEFAULT false,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL
 );
 
 -- দ্রুত ফিল্টারিংয়ের জন্য ইনডেক্স
