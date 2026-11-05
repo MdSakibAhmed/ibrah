@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, BorderRadius } from '../constants/theme';
@@ -9,6 +9,9 @@ interface HeaderProps {
   subtitle?: string;
   showBack?: boolean;
   rightAction?: 'settings' | 'learnings' | 'none';
+  isCloudActive?: boolean;
+  isSyncing?: boolean;
+  onSyncPress?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,6 +19,9 @@ export const Header: React.FC<HeaderProps> = ({
   subtitle = 'দৈনন্দিন প্রজ্ঞা ও আত্মশুদ্ধির ডায়েরি',
   showBack = false,
   rightAction = 'settings',
+  isCloudActive = false,
+  isSyncing = false,
+  onSyncPress,
 }) => {
   const router = useRouter();
 
@@ -43,6 +49,26 @@ export const Header: React.FC<HeaderProps> = ({
       </View>
 
       <View style={styles.rightContainer}>
+        {/* Cloud Sync Icon Indicator */}
+        {onSyncPress && (
+          <TouchableOpacity
+            style={[styles.syncButton, isCloudActive && styles.syncButtonActive]}
+            onPress={onSyncPress}
+            activeOpacity={0.7}
+            accessibilityLabel="ক্লাউড সিঙ্ক স্থিতি"
+          >
+            {isSyncing ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <Ionicons
+                name={isCloudActive ? 'cloud-done-outline' : 'cloud-offline-outline'}
+                size={19}
+                color={isCloudActive ? Colors.success : Colors.textMuted}
+              />
+            )}
+          </TouchableOpacity>
+        )}
+
         {rightAction === 'settings' && (
           <TouchableOpacity
             style={styles.iconButton}
@@ -53,6 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
             <Ionicons name="settings-outline" size={21} color={Colors.primary} />
           </TouchableOpacity>
         )}
+
         {rightAction === 'learnings' && (
           <TouchableOpacity
             style={styles.iconButton}
@@ -120,6 +147,21 @@ const styles = StyleSheet.create({
   rightContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  syncButton: {
+    width: 38,
+    height: 38,
+    borderRadius: BorderRadius.full,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  syncButtonActive: {
+    borderColor: 'rgba(46, 125, 50, 0.3)',
+    backgroundColor: Colors.successLight,
   },
   iconButton: {
     width: 40,
@@ -128,7 +170,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.border,
     shadowColor: '#000',

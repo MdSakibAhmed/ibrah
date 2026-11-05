@@ -25,6 +25,7 @@ import { WaveformIndicator } from '../components/WaveformIndicator';
 import { AIService } from '../services/ai';
 import { DatabaseService } from '../services/database';
 import { SecurityService } from '../services/securityService';
+import { SyncService } from '../services/syncService';
 import { Colors, Spacing, Typography, BorderRadius } from '../constants/theme';
 
 export default function RecordScreen() {
@@ -202,6 +203,11 @@ export default function RecordScreen() {
         isFavorite: false,
       });
 
+      // Background push to cloud sync
+      SyncService.pushReflection(saved).catch((e) =>
+        console.warn('[RecordScreen] Background push failed:', e)
+      );
+
       setIsProcessing(false);
       router.replace(`/reflection/${saved.id}`);
     } catch (error: any) {
@@ -245,6 +251,11 @@ export default function RecordScreen() {
         audioDurationSeconds: 0,
         isFavorite: false,
       });
+
+      // Background push to cloud sync
+      SyncService.pushReflection(saved).catch((e) =>
+        console.warn('[RecordScreen] Background push failed:', e)
+      );
 
       setIsProcessing(false);
       router.replace(`/reflection/${saved.id}`);

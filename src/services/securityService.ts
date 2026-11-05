@@ -7,76 +7,131 @@ import * as SecureStore from 'expo-secure-store';
  * input sanitization, and path traversal protection.
  */
 const GEMINI_API_KEY_STORAGE = 'ibrah_gemini_api_key';
+const SUPABASE_URL_STORAGE = 'ibrah_supabase_url';
+const SUPABASE_ANON_KEY_STORAGE = 'ibrah_supabase_anon_key';
+const SYNC_USER_ID_STORAGE = 'ibrah_sync_user_id';
+
+async function setSecureItem(key: string, value: string): Promise<boolean> {
+  try {
+    const sanitized = value.trim();
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        if (!sanitized) {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, sanitized);
+        }
+      }
+      return true;
+    }
+
+    if (!sanitized) {
+      await SecureStore.deleteItemAsync(key);
+      return true;
+    }
+
+    await SecureStore.setItemAsync(key, sanitized, {
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+    });
+    return true;
+  } catch (error) {
+    console.error(`[SecurityService] Error saving ${key}:`, error);
+    return false;
+  }
+}
+
+async function getSecureItem(key: string): Promise<string | null> {
+  try {
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return window.localStorage.getItem(key);
+      }
+      return null;
+    }
+    return await SecureStore.getItemAsync(key);
+  } catch (error) {
+    console.error(`[SecurityService] Error getting ${key}:`, error);
+    return null;
+  }
+}
+
+async function deleteSecureItem(key: string): Promise<boolean> {
+  try {
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(key);
+      }
+      return true;
+    }
+    await SecureStore.deleteItemAsync(key);
+    return true;
+  } catch (error) {
+    console.error(`[SecurityService] Error deleting ${key}:`, error);
+    return false;
+  }
+}
 
 export class SecurityService {
   /**
-   * Save Gemini API Key securely (hardware-backed on mobile, localStorage on web)
+   * Save Gemini API Key securely
    */
   static async saveApiKey(apiKey: string): Promise<boolean> {
-    try {
-      const sanitized = apiKey.trim();
-
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          if (!sanitized) {
-            window.localStorage.removeItem(GEMINI_API_KEY_STORAGE);
-          } else {
-            window.localStorage.setItem(GEMINI_API_KEY_STORAGE, sanitized);
-          }
-        }
-        return true;
-      }
-
-      if (!sanitized) {
-        await SecureStore.deleteItemAsync(GEMINI_API_KEY_STORAGE);
-        return true;
-      }
-
-      await SecureStore.setItemAsync(GEMINI_API_KEY_STORAGE, sanitized, {
-        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
-      });
-      return true;
-    } catch (error) {
-      console.error('[SecurityService] Error saving API key securely:', error);
-      return false;
-    }
+    return await setSecureItem(GEMINI_API_KEY_STORAGE, apiKey);
   }
 
   /**
    * Retrieve Gemini API Key securely
    */
   static async getApiKey(): Promise<string | null> {
-    try {
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          return window.localStorage.getItem(GEMINI_API_KEY_STORAGE);
-        }
-        return null;
-      }
-      return await SecureStore.getItemAsync(GEMINI_API_KEY_STORAGE);
-    } catch (error) {
-      console.error('[SecurityService] Error getting API key:', error);
-      return null;
-    }
+    return await getSecureItem(GEMINI_API_KEY_STORAGE);
   }
 
   /**
    * Delete API Key securely
    */
   static async deleteApiKey(): Promise<boolean> {
-    try {
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.removeItem(GEMINI_API_KEY_STORAGE);
-        }
-        return true;
-      }
-      await SecureStore.deleteItemAsync(GEMINI_API_KEY_STORAGE);
-      return true;
-    } catch (error) {
-      console.error('[SecurityService] Error deleting API key:', error);
-      return false;
-    }
+    return await deleteSecureItem(GEMINI_API_KEY_STORAGE);
+  }
+
+  /**
+   * Save Supabase Cloud Configuration
+   */
+  static async saveSupabaseConfig(url: string, anonKey: string): Promise<boolean> {
+    const s1 = await setSecureItem(SUPABASE_URL_STORAGE, url);
+    const s2 = await setSecureItem(SUPABASE_ANON_KEY_STORAGE, anonKey);
+    return s1 && s2;
+  }
+
+  /**
+   * Get Supabase Cloud Configuration
+   */
+  static async getSupabaseConfig(): Promise<{ url: string | null; anonKey: string | null }> {
+    const url = await getSecureItem(SUPABASE_URL_STORAGE);
+    const anonKey = await getSecureItem(SUPABASE_ANON_KEY_STORAGE);
+    return { url, anonKey };
+  }
+
+  /**
+   * Delete Supabase Cloud Configuration
+   */
+  static async deleteSupabaseConfig(): Promise<boolean> {
+    const d1 = await deleteSecureItem(SUPABASE_URL_STORAGE);
+    const d2 = await deleteSecureItem(SUPABASE_ANON_KEY_STORAGE);
+    return d1 && d2;
+  }
+
+  /**
+   * Save Sync User ID / Passphrase for isolating multi-device reflections
+   */
+  static async saveSyncUserId(userId: string): Promise<boolean> {
+    return await setSecureItem(SYNC_USER_ID_STORAGE, userId);
+  }
+
+  /**
+   * Get Sync User ID
+   */
+  static async getSyncUserId(): Promise<string | null> {
+    return await getSecureItem(SYNC_USER_ID_STORAGE);
   }
 
   /**
@@ -85,7 +140,7 @@ export class SecurityService {
   static sanitizeText(input: string): string {
     if (!input || typeof input !== 'string') return '';
     return input
-      .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F]/g, '') // remove invisible control characters
+      .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F]/g, '')
       .trim();
   }
 
@@ -111,7 +166,7 @@ export class SecurityService {
     for (let i = 0; i < content.length; i++) {
       const char = content.charCodeAt(i);
       hash = (hash << 5) - hash + char;
-      hash |= 0; // Convert to 32bit integer
+      hash |= 0;
     }
     return Math.abs(hash).toString(16).padStart(8, '0');
   }

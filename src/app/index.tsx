@@ -17,6 +17,7 @@ import { FilterPill } from '../components/FilterPill';
 import { DailyWisdomCard } from '../components/DailyWisdomCard';
 import { ReflectionCard } from '../components/ReflectionCard';
 import { DatabaseService } from '../services/database';
+import { SyncService } from '../services/syncService';
 import { Reflection } from '../types/reflection';
 import { Colors, Spacing, Typography, BorderRadius } from '../constants/theme';
 
@@ -28,6 +29,8 @@ export default function HomeScreen() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [isCloudActive, setIsCloudActive] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   // Load reflections whenever screen gains focus or filter changes
   const loadData = useCallback(async () => {
@@ -56,12 +59,46 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadData();
+      SyncService.isConfigured().then((configured) => setIsCloudActive(configured));
     }, [loadData])
   );
+
+  useEffect(() => {
+    SyncService.isConfigured().then((configured) => {
+      setIsCloudActive(configured);
+      if (configured) {
+        SyncService.initRealtime(() => {
+          loadData();
+        });
+      }
+    });
+
+    const unsubscribe = SyncService.subscribeStatus(({ isSyncing: syncing }) => {
+      setIsSyncing(syncing);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [loadData]);
+
+  const handleManualSync = async () => {
+    const configured = await SyncService.isConfigured();
+    if (!configured) {
+      router.push('/settings');
+      return;
+    }
+    await SyncService.syncAll();
+    await loadData();
+  };
 
   const handleRefresh = async () => {
     setRefreshing(true);
     await loadData();
+    const configured = await SyncService.isConfigured();
+    if (configured) {
+      SyncService.syncAll().then(() => loadData()).catch((e) => console.warn('[HomeScreen] Sync error:', e));
+    }
   };
 
   const handleShuffleWisdom = async () => {
@@ -179,6 +216,9 @@ export default function HomeScreen() {
         title="ইবরা"
         subtitle="উপলব্ধি ও আত্মশুদ্ধির ডায়েরি"
         rightAction="settings"
+        isCloudActive={isCloudActive}
+        isSyncing={isSyncing}
+        onSyncPress={handleManualSync}
       />
 
       <FlatList

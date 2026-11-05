@@ -8,6 +8,7 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +16,7 @@ import { Header } from '../components/Header';
 import { SecurityService } from '../services/securityService';
 import { BackupService } from '../services/backupService';
 import { DatabaseService } from '../services/database';
+import { SyncService } from '../services/syncService';
 import { Colors, Spacing, Typography, BorderRadius } from '../constants/theme';
 
 export default function SettingsScreen() {
@@ -23,6 +25,15 @@ export default function SettingsScreen() {
   const [totalCount, setTotalCount] = useState<number>(0);
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [isRestoring, setIsRestoring] = useState<boolean>(false);
+
+  // Cloud Sync state
+  const [supabaseUrl, setSupabaseUrl] = useState<string>('');
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState<string>('');
+  const [syncUserId, setSyncUserId] = useState<string>('');
+  const [isSyncConfigured, setIsSyncConfigured] = useState<boolean>(false);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const [lastSyncText, setLastSyncText] = useState<string | null>(null);
+  const [isSqlModalVisible, setIsSqlModalVisible] = useState<boolean>(false);
 
   useEffect(() => {
     loadSettings();
@@ -36,6 +47,14 @@ export default function SettingsScreen() {
     }
     const count = await DatabaseService.getCount();
     setTotalCount(count);
+
+    // Load Cloud Sync settings
+    const { url, anonKey } = await SecurityService.getSupabaseConfig();
+    const userId = await SecurityService.getSyncUserId();
+    if (url) setSupabaseUrl(url);
+    if (anonKey) setSupabaseAnonKey(anonKey);
+    if (userId) setSyncUserId(userId);
+    setIsSyncConfigured(Boolean(url && anonKey && userId));
   };
 
   const handleSaveApiKey = async () => {
@@ -53,6 +72,67 @@ export default function SettingsScreen() {
     } else {
       Alert.alert('ত্রুটি', 'API Key সংরক্ষণ করা সম্ভব হয়নি।');
     }
+  };
+
+  const handleSaveCloudSync = async () => {
+    if (!supabaseUrl.trim() || !supabaseAnonKey.trim() || !syncUserId.trim()) {
+      Alert.alert('অসম্পূর্ণ তথ্য', 'দয়া করে Supabase URL, Anon Key এবং আপনার Sync Key (গোপন শব্দ) প্রদান করুন।');
+      return;
+    }
+
+    try {
+      const success = await SyncService.configure(
+        supabaseUrl.trim(),
+        supabaseAnonKey.trim(),
+        syncUserId.trim()
+      );
+
+      if (success) {
+        setIsSyncConfigured(true);
+        Alert.alert('সফল', 'ক্লাউড সিঙ্ক সফলভাবে সংযুক্ত হয়েছে! প্রথমবার সিঙ্ক সম্পন্ন হচ্ছে...');
+        handlePerformCloudSync();
+      } else {
+        Alert.alert('ত্রুটি', 'ক্লাউড সিঙ্ক তথ্য সংরক্ষণ করা যায়নি।');
+      }
+    } catch (err: any) {
+      Alert.alert('ত্রুটি', 'কনফিগারেশন ব্যর্থ: ' + (err?.message || ''));
+    }
+  };
+
+  const handlePerformCloudSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      const result = await SyncService.syncAll();
+      if (result.success) {
+        Alert.alert('সিঙ্ক সফল', result.message);
+        setLastSyncText(new Date().toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' }));
+        const count = await DatabaseService.getCount();
+        setTotalCount(count);
+      } else {
+        Alert.alert('সিঙ্ক সতর্কতা', result.message);
+      }
+    } catch (err: any) {
+      Alert.alert('ত্রুটি', 'সিঙ্ক ব্যর্থ: ' + (err?.message || ''));
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
+
+  const handleDisconnectCloudSync = async () => {
+    Alert.alert('সিঙ্ক সংযোগ বিচ্ছিন্ন', 'আপনি কি ক্লাউড সিঙ্ক সংযোগ মুছে ফেলতে চান?', [
+      { text: 'বাতিল', style: 'cancel' },
+      {
+        text: 'হ্যাঁ, বিচ্ছিন্ন করুন',
+        style: 'destructive',
+        onPress: async () => {
+          await SyncService.disconnect();
+          setIsSyncConfigured(false);
+          setSupabaseUrl('');
+          setSupabaseAnonKey('');
+          Alert.alert('সম্পন্ন', 'ক্লাউড সিঙ্ক নিষ্ক্রিয় করা হয়েছে।');
+        },
+      },
+    ]);
   };
 
   const handleBackupToGoogleDrive = async () => {
@@ -165,18 +245,126 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <Header title="সেটিংস ও নিরাপত্তা" subtitle="গুগল ড্রাইভ ব্যাকআপ ও এআই সংযোগ" showBack rightAction="none" />
+      <Header title="সেটিংস ও সিঙ্ক" subtitle="মোবাইল-ওয়েব সিঙ্ক ও ব্যাকআপ" showBack rightAction="none" />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Google Drive Backup Section */}
+        {/* 1. Real-Time Cloud Sync Section (Mobile & Web) */}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
             <View style={styles.iconCircleEmerald}>
-              <Ionicons name="cloud-upload-outline" size={20} color={Colors.primary} />
+              <Ionicons name="sync-circle-outline" size={22} color={Colors.primary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.sectionTitle}>গুগল ড্রাইভ ব্যাকআপ</Text>
-              <Text style={styles.sectionSubtitle}>আপনার ডেটা ক্লাউডে নিরাপদে সংরক্ষণ করুন</Text>
+              <Text style={styles.sectionTitle}>মোবাইল ও ওয়েব স্বয়ংক্রিয় সিঙ্ক</Text>
+              <Text style={styles.sectionSubtitle}>রিয়েল-টাইম টু-ওয়ে ক্লাউড সিঙ্ক্রোনাইজেশন</Text>
+            </View>
+          </View>
+
+          {/* Sync Status Badge */}
+          <View style={[styles.syncStatusBadge, isSyncConfigured ? styles.syncBadgeActive : styles.syncBadgeInactive]}>
+            <Ionicons
+              name={isSyncConfigured ? 'checkmark-circle' : 'ellipse-outline'}
+              size={15}
+              color={isSyncConfigured ? Colors.success : Colors.textMuted}
+            />
+            <Text style={[styles.syncStatusText, isSyncConfigured && styles.syncStatusTextActive]}>
+              {isSyncConfigured
+                ? `স্বয়ংক্রিয় সিঙ্ক সক্রিয় ${lastSyncText ? `(সর্বশেষ: ${lastSyncText})` : ''}`
+                : 'সিঙ্ক কনফিগার করা হয়নি'}
+            </Text>
+          </View>
+
+          <Text style={styles.sectionHelpText}>
+            🔒 <Text style={{ fontWeight: 'bold' }}>কীভাবে কাজ করে?</Text> আপনার ফ্রি Supabase অ্যাকাউন্টের প্রজেক্ট URL, Anon Key এবং একটি নিজস্ব গোপন "Sync Key" নিচে দিন। মোবাইল ও ওয়েব উভয় অ্যাপে এই একই তথ্য দিলে দুটি ডিভাইসের মধ্যে স্বয়ংক্রিয়ভাবে রিয়েল-টাইম সিঙ্ক হতে থাকবে।
+          </Text>
+
+          <Text style={styles.inputLabel}>Supabase Project URL</Text>
+          <TextInput
+            style={styles.keyInput}
+            value={supabaseUrl}
+            onChangeText={setSupabaseUrl}
+            placeholder="https://your-project.supabase.co"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <Text style={styles.inputLabel}>Supabase Anon Key</Text>
+          <TextInput
+            style={styles.keyInput}
+            value={supabaseAnonKey}
+            onChangeText={setSupabaseAnonKey}
+            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            placeholderTextColor={Colors.textMuted}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <Text style={styles.inputLabel}>আপনার গোপন Sync Key (পাসফ্রেজ)</Text>
+          <TextInput
+            style={styles.keyInput}
+            value={syncUserId}
+            onChangeText={setSyncUserId}
+            placeholder="যেমন: my-family-notes-2026 (উভয় ডিভাইসে এক দিবেন)"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <View style={styles.syncButtonsRow}>
+            <TouchableOpacity
+              style={styles.saveSyncButton}
+              onPress={handleSaveCloudSync}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="link-outline" size={18} color={Colors.textInverse} />
+              <Text style={styles.saveSyncButtonText}>
+                {isSyncConfigured ? 'সিঙ্ক আপডেট করুন' : 'সংযোগ ও সিঙ্ক সক্রিয় করুন'}
+              </Text>
+            </TouchableOpacity>
+
+            {isSyncConfigured && (
+              <TouchableOpacity
+                style={styles.syncNowButton}
+                onPress={handlePerformCloudSync}
+                disabled={isManualSyncing}
+                activeOpacity={0.85}
+              >
+                {isManualSyncing ? (
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                ) : (
+                  <>
+                    <Ionicons name="refresh" size={17} color={Colors.primary} />
+                    <Text style={styles.syncNowButtonText}>এখনই সিঙ্ক</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <View style={styles.syncAuxRow}>
+            <TouchableOpacity onPress={() => setIsSqlModalVisible(true)}>
+              <Text style={styles.sqlHelpLink}>📋 ডেটাবেজ SQL কোড দেখুন</Text>
+            </TouchableOpacity>
+
+            {isSyncConfigured && (
+              <TouchableOpacity onPress={handleDisconnectCloudSync}>
+                <Text style={styles.disconnectLink}>সংযোগ বিচ্ছিন্ন</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {/* 2. Google Drive Manual Backup Section */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.iconCircleGold}>
+              <Ionicons name="cloud-upload-outline" size={20} color={Colors.accentDark} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>গুগল ড্রাইভ ব্যাকআপ (ম্যানুয়াল)</Text>
+              <Text style={styles.sectionSubtitle}>আপনার ডেটা ক্লাউডে অফলাইন ব্যাকআপ ফাইল হিসেবে সংরক্ষণ</Text>
             </View>
           </View>
 
@@ -218,11 +406,11 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Gemini AI API Key Configuration */}
+        {/* 3. Gemini AI API Key Configuration */}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
-            <View style={styles.iconCircleGold}>
-              <Ionicons name="key-outline" size={20} color={Colors.accentDark} />
+            <View style={styles.iconCircleEmerald}>
+              <Ionicons name="key-outline" size={20} color={Colors.primary} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.sectionTitle}>Google Gemini API Key</Text>
@@ -260,11 +448,11 @@ export default function SettingsScreen() {
           </Text>
         </View>
 
-        {/* Sample Demo Data */}
+        {/* 4. Sample Demo Data */}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
-            <View style={styles.iconCircleEmerald}>
-              <Ionicons name="sparkles-outline" size={20} color={Colors.primary} />
+            <View style={styles.iconCircleGold}>
+              <Ionicons name="sparkles-outline" size={20} color={Colors.accentDark} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.sectionTitle}>নমুনা উপলব্ধি (Demo Data)</Text>
@@ -290,6 +478,33 @@ export default function SettingsScreen() {
           </Text>
         </View>
       </ScrollView>
+
+      {/* SQL Schema Modal */}
+      <Modal
+        visible={isSqlModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setIsSqlModalVisible(false)}
+      >
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Supabase SQL সেটআপ কোড</Text>
+            <TouchableOpacity onPress={() => setIsSqlModalVisible(false)}>
+              <Text style={styles.modalCloseText}>বন্ধ করুন</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.modalContent}>
+            <Text style={styles.modalHelp}>
+              আপনার বিনামূল্যে পাওয়া Supabase ড্যাশবোর্ডে গিয়ে **SQL Editor** এ নিচের কোডটি পেস্ট করে **Run** চাপুন:
+            </Text>
+            <View style={styles.codeBox}>
+              <Text style={styles.codeText} selectable>
+                {SyncService.getSetupSQL()}
+              </Text>
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -320,7 +535,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
-    marginBottom: Spacing.md,
+    marginBottom: Spacing.sm,
   },
   iconCircleEmerald: {
     width: 40,
@@ -347,6 +562,109 @@ const styles = StyleSheet.create({
     fontSize: Typography.fontSizes.xs,
     color: Colors.textSecondary,
     marginTop: 1,
+  },
+  syncStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: BorderRadius.md,
+    marginVertical: Spacing.sm,
+  },
+  syncBadgeActive: {
+    backgroundColor: Colors.successLight,
+  },
+  syncBadgeInactive: {
+    backgroundColor: Colors.borderLight,
+  },
+  syncStatusText: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.textSecondary,
+    fontWeight: Typography.fontWeights.medium,
+  },
+  syncStatusTextActive: {
+    color: Colors.success,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  sectionHelpText: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+    marginBottom: Spacing.md,
+  },
+  inputLabel: {
+    fontSize: Typography.fontSizes.xs,
+    fontWeight: Typography.fontWeights.semibold,
+    color: Colors.textSecondary,
+    marginBottom: 4,
+  },
+  keyInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    fontSize: Typography.fontSizes.sm,
+    color: Colors.text,
+    marginBottom: Spacing.md,
+  },
+  syncButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  saveSyncButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    gap: 6,
+  },
+  saveSyncButtonText: {
+    color: Colors.textInverse,
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  syncNowButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    gap: 6,
+  },
+  syncNowButtonText: {
+    color: Colors.primary,
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  syncAuxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: Spacing.md,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+  },
+  sqlHelpLink: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.primary,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  disconnectLink: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.danger,
+    fontWeight: Typography.fontWeights.medium,
   },
   statsRow: {
     flexDirection: 'row',
@@ -407,17 +725,6 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.md,
     marginBottom: Spacing.md,
   },
-  keyInput: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 2,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    fontSize: Typography.fontSizes.sm,
-    color: Colors.text,
-    marginBottom: Spacing.md,
-  },
   saveKeyButton: {
     backgroundColor: Colors.primary,
     alignItems: 'center',
@@ -467,5 +774,48 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
     maxWidth: 280,
+  },
+  modalSafe: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  modalTitle: {
+    fontSize: Typography.fontSizes.md,
+    fontWeight: Typography.fontWeights.bold,
+    color: Colors.primary,
+  },
+  modalCloseText: {
+    fontSize: Typography.fontSizes.sm,
+    color: Colors.primary,
+    fontWeight: Typography.fontWeights.bold,
+  },
+  modalContent: {
+    padding: Spacing.xl,
+  },
+  modalHelp: {
+    fontSize: Typography.fontSizes.sm,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.md,
+    lineHeight: 20,
+  },
+  codeBox: {
+    backgroundColor: '#1E2925',
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+  },
+  codeText: {
+    color: '#A7F3D0',
+    fontFamily: 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
   },
 });
