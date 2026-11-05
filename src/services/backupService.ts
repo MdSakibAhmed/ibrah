@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
@@ -7,7 +8,7 @@ import { SecurityService } from './securityService';
 
 export class BackupService {
   /**
-   * Export database reflections to a JSON package and share to Google Drive
+   * Export database reflections to a JSON package and share to Google Drive / Download on Web
    */
   static async exportToGoogleDrive(): Promise<{ success: boolean; message: string; count: number }> {
     try {
@@ -23,7 +24,6 @@ export class BackupService {
       const now = new Date();
       const timestamp = now.toISOString().replace(/[:.]/g, '-');
       const fileName = `ibrah_backup_${timestamp}.json`;
-      const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
 
       const reflectionsJson = JSON.stringify(reflections);
       const signature = SecurityService.generateSimpleChecksum(reflectionsJson);
@@ -36,7 +36,30 @@ export class BackupService {
         signature,
       };
 
-      await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(backupPackage, null, 2), {
+      const packageString = JSON.stringify(backupPackage, null, 2);
+
+      // On Web: Trigger direct browser download or Web Share API
+      if (Platform.OS === 'web') {
+        const blob = new Blob([packageString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        return {
+          success: true,
+          message: `${reflections.length}টি লার্নিং ও নোট সফলভাবে ডাউনলোড হয়েছে। ফাইলটি আপনার গুগল ড্রাইভে সংরক্ষণ করতে পারেন।`,
+          count: reflections.length,
+        };
+      }
+
+      // On Mobile: Write to local cache and open native share sheet for Google Drive
+      const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(fileUri, packageString, {
         encoding: FileSystem.EncodingType.UTF8,
       });
 
@@ -44,7 +67,7 @@ export class BackupService {
       if (!isAvailable) {
         return {
           success: false,
-          message: 'ডিভাইসে ফাইল শেয়ারিং বা ক্লাউডে আপলোডের সুবিধা সমর্থিত নয়।',
+          message: 'ডিভাইসে ফাইল শেয়ারিং সমর্থিত নয়।',
           count: reflections.length,
         };
       }
@@ -95,9 +118,16 @@ export class BackupService {
       }
 
       const fileAsset = result.assets[0];
-      const fileContent = await FileSystem.readAsStringAsync(fileAsset.uri, {
-        encoding: FileSystem.EncodingType.UTF8,
-      });
+      let fileContent: string;
+
+      if (Platform.OS === 'web') {
+        const resp = await fetch(fileAsset.uri);
+        fileContent = await resp.text();
+      } else {
+        fileContent = await FileSystem.readAsStringAsync(fileAsset.uri, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+      }
 
       let parsed: any;
       try {

@@ -155,21 +155,25 @@ export default function RecordScreen() {
         throw new Error('রেকর্ডকৃত অডিও ফাইল খুঁজে পাওয়া যায়নি।');
       }
 
-      // Ensure directory exists for permanent storage
-      const recordingsDir = `${FileSystem.documentDirectory}recordings/`;
-      const dirInfo = await FileSystem.getInfoAsync(recordingsDir);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(recordingsDir, { intermediates: true });
+      let permanentUri = tempUri;
+
+      if (Platform.OS !== 'web') {
+        // Ensure directory exists for permanent storage
+        const recordingsDir = `${FileSystem.documentDirectory}recordings/`;
+        const dirInfo = await FileSystem.getInfoAsync(recordingsDir);
+        if (!dirInfo.exists) {
+          await FileSystem.makeDirectoryAsync(recordingsDir, { intermediates: true });
+        }
+
+        const fileName = `rec_${Date.now()}.m4a`;
+        permanentUri = `${recordingsDir}${fileName}`;
+
+        // Move audio file to permanent internal storage
+        await FileSystem.moveAsync({
+          from: tempUri,
+          to: permanentUri,
+        });
       }
-
-      const fileName = `rec_${Date.now()}.m4a`;
-      const permanentUri = `${recordingsDir}${fileName}`;
-
-      // Move audio file to permanent internal storage
-      await FileSystem.moveAsync({
-        from: tempUri,
-        to: permanentUri,
-      });
 
       setProcessingStatus('AI এর মাধ্যমে আপনার কথা শুনে শিক্ষা ও সারসংক্ষেপ তৈরি হচ্ছে...');
 

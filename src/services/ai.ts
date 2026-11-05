@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { AIAnalysisResult } from '../types/reflection';
 import { SecurityService } from './securityService';
@@ -30,7 +31,7 @@ const SYSTEM_PROMPT = `
 
 export class AIService {
   /**
-   * Process recorded audio file through Gemini Multimodal API
+   * Process recorded audio file through Gemini Multimodal API (Mobile & Web)
    */
   static async analyzeAudio(audioUri: string): Promise<AIAnalysisResult> {
     const apiKey = await SecurityService.getApiKey();
@@ -42,16 +43,36 @@ export class AIService {
     }
 
     try {
-      // Read audio file as base64
-      const base64Audio = await FileSystem.readAsStringAsync(audioUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      // Determine mime type (usually m4a, mp4, wav or aac in expo-audio)
+      let base64Audio: string;
       let mimeType = 'audio/m4a';
+
       if (audioUri.endsWith('.wav')) mimeType = 'audio/wav';
       else if (audioUri.endsWith('.mp3')) mimeType = 'audio/mp3';
       else if (audioUri.endsWith('.aac')) mimeType = 'audio/aac';
+      else if (audioUri.endsWith('.webm') || audioUri.includes('webm')) mimeType = 'audio/webm';
+
+      // On Web: audioUri is typically a blob: URL
+      if (Platform.OS === 'web') {
+        const resp = await fetch(audioUri);
+        const blob = await resp.blob();
+        if (blob.type) mimeType = blob.type.split(';')[0];
+
+        base64Audio = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string;
+            const base64 = dataUrl.split(',')[1];
+            resolve(base64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } else {
+        // On Mobile: read file directly using FileSystem
+        base64Audio = await FileSystem.readAsStringAsync(audioUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+      }
 
       const requestBody = {
         contents: [

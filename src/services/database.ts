@@ -1,8 +1,10 @@
+import { Platform } from 'react-native';
 import * as SQLite from 'expo-sqlite';
 import { Reflection } from '../types/reflection';
 import { SecurityService } from './securityService';
 
 const DB_NAME = 'ibrah_reflections.db';
+const WEB_STORAGE_KEY = 'ibrah_reflections_web_store';
 
 let dbInstance: SQLite.SQLiteDatabase | null = null;
 
@@ -80,11 +82,40 @@ function mapRowToReflection(row: DBRow): Reflection {
   };
 }
 
+// Web LocalStorage Helper functions
+function getWebReflections(): Reflection[] {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(WEB_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function setWebReflections(list: Reflection[]): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify(list));
+  } catch (err) {
+    console.error('[DatabaseService Web] Error setting reflections in localStorage:', err);
+  }
+}
+
 export class DatabaseService {
   /**
    * Initialize the database and ensure schemas are ready
    */
   static async init(): Promise<void> {
+    if (Platform.OS === 'web') {
+      // Ensure web store exists
+      if (typeof window !== 'undefined' && window.localStorage) {
+        if (!window.localStorage.getItem(WEB_STORAGE_KEY)) {
+          window.localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify([]));
+        }
+      }
+      return;
+    }
     await getDatabase();
   }
 
@@ -96,6 +127,34 @@ export class DatabaseService {
     searchQuery?: string;
     favoritesOnly?: boolean;
   }): Promise<Reflection[]> {
+    if (Platform.OS === 'web') {
+      let list = getWebReflections();
+
+      if (options?.category && options.category !== 'all') {
+        list = list.filter((r) => r.category === options.category);
+      }
+
+      if (options?.favoritesOnly) {
+        list = list.filter((r) => r.isFavorite);
+      }
+
+      if (options?.searchQuery) {
+        const query = options.searchQuery.toLowerCase().trim();
+        list = list.filter(
+          (r) =>
+            r.title.toLowerCase().includes(query) ||
+            r.story.toLowerCase().includes(query) ||
+            r.learning.toLowerCase().includes(query) ||
+            r.summary.toLowerCase().includes(query) ||
+            r.tags.some((t) => t.toLowerCase().includes(query))
+        );
+      }
+
+      return list.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    }
+
     const db = await getDatabase();
     let query = 'SELECT * FROM reflections WHERE 1=1';
     const params: (string | number)[] = [];
@@ -111,7 +170,8 @@ export class DatabaseService {
 
     if (options?.searchQuery) {
       const sanitized = `%${SecurityService.sanitizeText(options.searchQuery)}%`;
-      query += ' AND (title LIKE ? OR story LIKE ? OR learning LIKE ? OR summary LIKE ? OR tags LIKE ?)';
+      query +=
+        ' AND (title LIKE ? OR story LIKE ? OR learning LIKE ? OR summary LIKE ? OR tags LIKE ?)';
       params.push(sanitized, sanitized, sanitized, sanitized, sanitized);
     }
 
@@ -125,6 +185,11 @@ export class DatabaseService {
    * Get a single reflection by its ID
    */
   static async getReflectionById(id: string): Promise<Reflection | null> {
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      return list.find((r) => r.id === id) || null;
+    }
+
     const db = await getDatabase();
     const row = await db.getFirstAsync<DBRow>(
       'SELECT * FROM reflections WHERE id = ?',
@@ -138,6 +203,13 @@ export class DatabaseService {
    * Get random reflections for the "Daily Wisdom / Flashback" card
    */
   static async getRandomWisdom(limit = 1): Promise<Reflection[]> {
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      if (list.length === 0) return [];
+      const shuffled = [...list].sort(() => 0.5 - Math.random());
+      return shuffled.slice(0, limit);
+    }
+
     const db = await getDatabase();
     const rows = await db.getAllAsync<DBRow>(
       'SELECT * FROM reflections ORDER BY RANDOM() LIMIT ?',
@@ -152,7 +224,6 @@ export class DatabaseService {
   static async saveReflection(
     reflection: Omit<Reflection, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
   ): Promise<Reflection> {
-    const db = await getDatabase();
     const id = reflection.id || Date.now().toString() + '_' + Math.random().toString(36).substring(2, 7);
     const now = new Date().toISOString();
 
@@ -161,6 +232,33 @@ export class DatabaseService {
     const sanitizedLearning = SecurityService.sanitizeText(reflection.learning);
     const sanitizedAction = SecurityService.sanitizeText(reflection.actionCommitment || '');
     const sanitizedSummary = SecurityService.sanitizeText(reflection.summary);
+
+    const newReflection: Reflection = {
+      id,
+      title: sanitizedTitle,
+      rawTranscript: reflection.rawTranscript || '',
+      story: sanitizedStory,
+      learning: sanitizedLearning,
+      actionCommitment: sanitizedAction,
+      summary: sanitizedSummary,
+      category: reflection.category,
+      tags: reflection.tags || [],
+      audioUri: reflection.audioUri || null,
+      audioDurationSeconds: reflection.audioDurationSeconds || 0,
+      isFavorite: reflection.isFavorite || false,
+      createdAt: now,
+      updatedAt: now,
+      backupStatus: 'local',
+    };
+
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      list.unshift(newReflection);
+      setWebReflections(list);
+      return newReflection;
+    }
+
+    const db = await getDatabase();
     const tagsJson = JSON.stringify(reflection.tags || []);
 
     await db.runAsync(
@@ -188,23 +286,7 @@ export class DatabaseService {
       ]
     );
 
-    return {
-      id,
-      title: sanitizedTitle,
-      rawTranscript: reflection.rawTranscript || '',
-      story: sanitizedStory,
-      learning: sanitizedLearning,
-      actionCommitment: sanitizedAction,
-      summary: sanitizedSummary,
-      category: reflection.category,
-      tags: reflection.tags || [],
-      audioUri: reflection.audioUri || null,
-      audioDurationSeconds: reflection.audioDurationSeconds || 0,
-      isFavorite: reflection.isFavorite,
-      createdAt: now,
-      updatedAt: now,
-      backupStatus: 'local',
-    };
+    return newReflection;
   }
 
   /**
@@ -214,9 +296,32 @@ export class DatabaseService {
     id: string,
     updates: Partial<Omit<Reflection, 'id' | 'createdAt'>>
   ): Promise<void> {
-    const db = await getDatabase();
     const now = new Date().toISOString();
 
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      const index = list.findIndex((r) => r.id === id);
+      if (index === -1) throw new Error('নোটটি পাওয়া যায়নি');
+
+      const current = list[index];
+      list[index] = {
+        ...current,
+        title: updates.title !== undefined ? SecurityService.sanitizeText(updates.title) : current.title,
+        story: updates.story !== undefined ? SecurityService.sanitizeText(updates.story) : current.story,
+        learning: updates.learning !== undefined ? SecurityService.sanitizeText(updates.learning) : current.learning,
+        actionCommitment: updates.actionCommitment !== undefined ? SecurityService.sanitizeText(updates.actionCommitment) : current.actionCommitment,
+        summary: updates.summary !== undefined ? SecurityService.sanitizeText(updates.summary) : current.summary,
+        category: updates.category !== undefined ? updates.category : current.category,
+        tags: updates.tags !== undefined ? updates.tags : current.tags,
+        isFavorite: updates.isFavorite !== undefined ? updates.isFavorite : current.isFavorite,
+        backupStatus: updates.backupStatus || current.backupStatus,
+        updatedAt: now,
+      };
+      setWebReflections(list);
+      return;
+    }
+
+    const db = await getDatabase();
     const current = await this.getReflectionById(id);
     if (!current) throw new Error('নোটটি পাওয়া যায়নি');
 
@@ -244,6 +349,15 @@ export class DatabaseService {
    * Toggle favorite status
    */
   static async toggleFavorite(id: string): Promise<boolean> {
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      const item = list.find((r) => r.id === id);
+      if (!item) return false;
+      item.isFavorite = !item.isFavorite;
+      setWebReflections(list);
+      return item.isFavorite;
+    }
+
     const db = await getDatabase();
     const current = await this.getReflectionById(id);
     if (!current) return false;
@@ -257,6 +371,13 @@ export class DatabaseService {
    * Delete a reflection
    */
   static async deleteReflection(id: string): Promise<void> {
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      const filtered = list.filter((r) => r.id !== id);
+      setWebReflections(filtered);
+      return;
+    }
+
     const db = await getDatabase();
     await db.runAsync('DELETE FROM reflections WHERE id = ?', [id]);
   }
@@ -265,6 +386,19 @@ export class DatabaseService {
    * Get all distinct tags across all reflections
    */
   static async getAllTags(): Promise<string[]> {
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      const tagSet = new Set<string>();
+      list.forEach((r) => {
+        if (Array.isArray(r.tags)) {
+          r.tags.forEach((t) => {
+            if (t && typeof t === 'string' && t.trim()) tagSet.add(t.trim());
+          });
+        }
+      });
+      return Array.from(tagSet);
+    }
+
     const db = await getDatabase();
     const rows = await db.getAllAsync<{ tags: string }>('SELECT tags FROM reflections');
     const tagSet = new Set<string>();
@@ -289,6 +423,11 @@ export class DatabaseService {
    * Get total reflections count
    */
   static async getCount(): Promise<number> {
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      return list.length;
+    }
+
     const db = await getDatabase();
     const result = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM reflections');
     return result?.count || 0;
@@ -298,6 +437,10 @@ export class DatabaseService {
    * Export all reflections for backup
    */
   static async getAllForBackup(): Promise<Reflection[]> {
+    if (Platform.OS === 'web') {
+      return getWebReflections();
+    }
+
     const db = await getDatabase();
     const rows = await db.getAllAsync<DBRow>('SELECT * FROM reflections ORDER BY created_at ASC');
     return rows.map(mapRowToReflection);
@@ -307,10 +450,26 @@ export class DatabaseService {
    * Import reflections safely during a restore operation
    */
   static async importReflections(reflections: Reflection[]): Promise<{ imported: number; updated: number }> {
-    const db = await getDatabase();
     let imported = 0;
     let updated = 0;
 
+    if (Platform.OS === 'web') {
+      const list = getWebReflections();
+      for (const r of reflections) {
+        const idx = list.findIndex((item) => item.id === r.id);
+        if (idx !== -1) {
+          list[idx] = { ...r, backupStatus: 'synced' };
+          updated++;
+        } else {
+          list.push({ ...r, backupStatus: 'synced' });
+          imported++;
+        }
+      }
+      setWebReflections(list);
+      return { imported, updated };
+    }
+
+    const db = await getDatabase();
     for (const r of reflections) {
       const existing = await db.getFirstAsync<{ id: string }>('SELECT id FROM reflections WHERE id = ?', [r.id]);
       const tagsJson = JSON.stringify(r.tags || []);

@@ -1,23 +1,37 @@
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 /**
- * Security Service for Ibrah App
- * Handles encrypted key storage (Keychain/KeyStore), input sanitization, and path traversal protection.
+ * Security Service for Ibrah App (Mobile & Web)
+ * Handles encrypted key storage (Keychain/KeyStore on mobile, LocalStorage on web),
+ * input sanitization, and path traversal protection.
  */
 const GEMINI_API_KEY_STORAGE = 'ibrah_gemini_api_key';
-const BACKUP_ENCRYPTION_PASS_STORAGE = 'ibrah_backup_pass';
 
 export class SecurityService {
   /**
-   * Save Gemini API Key securely in hardware-backed storage (iOS Keychain / Android KeyStore)
+   * Save Gemini API Key securely (hardware-backed on mobile, localStorage on web)
    */
   static async saveApiKey(apiKey: string): Promise<boolean> {
     try {
       const sanitized = apiKey.trim();
+
+      if (Platform.OS === 'web') {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          if (!sanitized) {
+            window.localStorage.removeItem(GEMINI_API_KEY_STORAGE);
+          } else {
+            window.localStorage.setItem(GEMINI_API_KEY_STORAGE, sanitized);
+          }
+        }
+        return true;
+      }
+
       if (!sanitized) {
         await SecureStore.deleteItemAsync(GEMINI_API_KEY_STORAGE);
         return true;
       }
+
       await SecureStore.setItemAsync(GEMINI_API_KEY_STORAGE, sanitized, {
         keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
       });
@@ -33,6 +47,12 @@ export class SecurityService {
    */
   static async getApiKey(): Promise<string | null> {
     try {
+      if (Platform.OS === 'web') {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          return window.localStorage.getItem(GEMINI_API_KEY_STORAGE);
+        }
+        return null;
+      }
       return await SecureStore.getItemAsync(GEMINI_API_KEY_STORAGE);
     } catch (error) {
       console.error('[SecurityService] Error getting API key:', error);
@@ -45,6 +65,12 @@ export class SecurityService {
    */
   static async deleteApiKey(): Promise<boolean> {
     try {
+      if (Platform.OS === 'web') {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.removeItem(GEMINI_API_KEY_STORAGE);
+        }
+        return true;
+      }
       await SecureStore.deleteItemAsync(GEMINI_API_KEY_STORAGE);
       return true;
     } catch (error) {
@@ -70,7 +96,11 @@ export class SecurityService {
     if (!filePath || filePath.includes('..')) {
       return false;
     }
-    return filePath.startsWith(allowedPrefix) || filePath.startsWith('file://');
+    return (
+      filePath.startsWith(allowedPrefix) ||
+      filePath.startsWith('file://') ||
+      filePath.startsWith('blob:')
+    );
   }
 
   /**
