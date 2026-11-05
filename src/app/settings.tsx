@@ -1,0 +1,471 @@
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { Header } from '../components/Header';
+import { SecurityService } from '../services/securityService';
+import { BackupService } from '../services/backupService';
+import { DatabaseService } from '../services/database';
+import { Colors, Spacing, Typography, BorderRadius } from '../constants/theme';
+
+export default function SettingsScreen() {
+  const [apiKey, setApiKey] = useState<string>('');
+  const [savedKeyExists, setSavedKeyExists] = useState<boolean>(false);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [isRestoring, setIsRestoring] = useState<boolean>(false);
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    const key = await SecurityService.getApiKey();
+    if (key) {
+      setApiKey(key);
+      setSavedKeyExists(true);
+    }
+    const count = await DatabaseService.getCount();
+    setTotalCount(count);
+  };
+
+  const handleSaveApiKey = async () => {
+    if (!apiKey.trim()) {
+      await SecurityService.deleteApiKey();
+      setSavedKeyExists(false);
+      Alert.alert('সফল', 'API Key মুছে ফেলা হয়েছে।');
+      return;
+    }
+
+    const success = await SecurityService.saveApiKey(apiKey.trim());
+    if (success) {
+      setSavedKeyExists(true);
+      Alert.alert('সফল', 'Gemini API Key নিরাপদে আপনার ডিভাইসে সংরক্ষিত হয়েছে।');
+    } else {
+      Alert.alert('ত্রুটি', 'API Key সংরক্ষণ করা সম্ভব হয়নি।');
+    }
+  };
+
+  const handleBackupToGoogleDrive = async () => {
+    setIsExporting(true);
+    try {
+      const result = await BackupService.exportToGoogleDrive();
+      if (result.success) {
+        Alert.alert('ব্যাকআপ সম্পন্ন', result.message);
+      } else {
+        Alert.alert('ব্যাকআপ সতর্কতা', result.message);
+      }
+    } catch (err: any) {
+      Alert.alert('ত্রুটি', 'ব্যাকআপে সমস্যা হয়েছে: ' + (err?.message || ''));
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleRestoreFromGoogleDrive = async () => {
+    setIsRestoring(true);
+    try {
+      const result = await BackupService.restoreFromGoogleDrive();
+      if (result.success) {
+        Alert.alert('রিস্টোর সম্পন্ন', result.message);
+        loadSettings();
+      } else {
+        Alert.alert('রিস্টোর নোটিশ', result.message);
+      }
+    } catch (err: any) {
+      Alert.alert('ত্রুটি', 'রিস্টোর করতে সমস্যা হয়েছে: ' + (err?.message || ''));
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
+  const handleSeedSampleData = async () => {
+    Alert.alert(
+      'ডেমো ডেটা যুক্ত করুন',
+      'অ্যাপটি পরীক্ষা করার জন্য ৩টি নমুনা উপলব্ধি ও শিক্ষা যুক্ত করতে চান?',
+      [
+        { text: 'বাতিল', style: 'cancel' },
+        {
+          text: 'হ্যাঁ, যুক্ত করুন',
+          onPress: async () => {
+            try {
+              await DatabaseService.saveReflection({
+                title: 'স্ত্রীর সাথে মতভিন্নতায় তাৎক্ষণিক নীরবতার বরকত',
+                rawTranscript:
+                  'আজকে বাসায় ফেরার পর ছোট একটি বিষয় নিয়ে স্ত্রীর সাথে তর্ক হওয়ার সম্ভাবনা ছিল। কিন্তু মনে হলো রাগ প্রকাশ না করে কিছুক্ষণ চুপ থাকা শ্রেয়।',
+                story:
+                  'কর্মক্ষেত্র থেকে ফিরে ক্লান্ত অবস্থায় একটি পারিবারিক বিষয় নিয়ে কিছুটা ভুল বোঝাবুঝি হচ্ছিল। তাৎক্ষণিক প্রতিক্রিয়া না দেখিয়ে নীরব থেকে বিষয়টি পর্যালোচনা করায় পরিবেশ শান্ত হয়ে যায়।',
+                learning:
+                  'মতভিন্নতার সময় সত্য প্রমাণের চেয়ে দাম্পত্য শান্তি ও সবর বজায় রাখা বহু গুণ বেশি কল্যাণকর।',
+                actionCommitment:
+                  'ভবিষ্যতে উত্তেজনাকর মুহূর্তে কোনো মন্তব্য না করে কিছুক্ষণ অপেক্ষা করব এবং অজু করব।',
+                summary: 'দাম্পত্যে তর্কের সময়ে তাৎক্ষণিক নীরবতা শান্তি রক্ষা করে।',
+                category: 'দাম্পত্য ও পরিবার',
+                tags: ['দাম্পত্য', 'সবর', 'রাগ সংবরণ'],
+                audioUri: null,
+                audioDurationSeconds: 45,
+                isFavorite: true,
+              });
+
+              await DatabaseService.saveReflection({
+                title: 'জুমার বয়ান: অন্যের দোষ খোঁজার চেয়ে আত্মশুদ্ধির গুরুত্ব',
+                rawTranscript:
+                  'জুমার মসজিদে খতিব সাহেব বলছিলেন আমরা অন্যের ছোট ছোট ভুল নিয়ে কথা বলি কিন্তু নিজের অন্তরের অহংকার দেখতে পাই না।',
+                story:
+                  'মসজিদে খতিব সাহেবের বয়ানে অন্যের গীবত ও দোষচর্চার ভয়াবহতা এবং নিজের নাফসের পরিশুদ্ধির অপরিহার্যতা আলোচনা করা হয়।',
+                learning:
+                  'যে ব্যক্তি নিজের ত্রুটি নিয়ে ব্যস্ত থাকে, তার অন্যের দোষ দেখার অবসর থাকে না।',
+                actionCommitment:
+                  'প্রতি রাতে ঘুমানোর আগে অন্তত পাঁচ মিনিট নিজের সারাদিনের কাজের আত্মপর্যালোচনা (মুহাসাবাহ) করব।',
+                summary: 'অন্যের ভুল না খুঁজে নিজের আমল সংশোধনে মনোযোগ দেওয়া।',
+                category: 'দ্বীন ও আখিরাত',
+                tags: ['আত্মশুদ্ধি', 'মুহাসাবাহ', 'গীবত বর্জন'],
+                audioUri: null,
+                audioDurationSeconds: 60,
+                isFavorite: true,
+              });
+
+              await DatabaseService.saveReflection({
+                title: 'কাজের জায়গায় কোনো সহকর্মীর ভুল ক্ষমাসুন্দর দৃষ্টিতে দেখা',
+                rawTranscript:
+                  'আজ অফিসে জুনিয়র সহকর্মী বড় একটা ভুল করেছিল। প্রথমে রেগে গিয়েছিলাম, কিন্তু পরে শান্তভাবে তাকে বুঝিয়ে বললাম।',
+                story:
+                  'প্রজেক্টের একটি গুরুত্বপূর্ণ ডেডলাইনের সময় সহকর্মীর অসতর্কতায় কিছু জটিলতা তৈরি হয়। কঠোর ভাষা প্রয়োগ না করে ধৈর্য সহকারে তাকে ভুল শোধরানোর সুযোগ দেওয়া হয়।',
+                learning:
+                  'মানুষকে লজ্জিত না করে সম্মান বজায় রেখে ভুল ধরিয়ে দিলে সে আজীবন কৃতজ্ঞ ও অনুগত থাকে।',
+                actionCommitment:
+                  'ভবিষ্যতে কোনো ভুল দেখলে সরাসরি তিরস্কার না করে ব্যক্তিগতভাবে ডেকে সুন্দর ভাষায় পরামর্শ দেব।',
+                summary: 'সহকর্মীর ভুলের পর সহনশীলতা বজায় রাখলে সম্পর্ক দৃঢ় হয়।',
+                category: 'মুয়ামালাত ও ব্যবহার',
+                tags: ['কর্মক্ষেত্র', 'ক্ষমা', 'নম্রতা'],
+                audioUri: null,
+                audioDurationSeconds: 30,
+                isFavorite: false,
+              });
+
+              await loadSettings();
+              Alert.alert('সফল', '৩টি নমুনা উপলব্ধি যুক্ত করা হয়েছে। হোম স্ক্রিনে গিয়ে দেখুন।');
+            } catch (err) {
+              Alert.alert('ত্রুটি', 'ডেমো ডেটা যুক্ত করা সম্ভব হয়নি।');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <Header title="সেটিংস ও নিরাপত্তা" subtitle="গুগল ড্রাইভ ব্যাকআপ ও এআই সংযোগ" showBack rightAction="none" />
+
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Google Drive Backup Section */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.iconCircleEmerald}>
+              <Ionicons name="cloud-upload-outline" size={20} color={Colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>গুগল ড্রাইভ ব্যাকআপ</Text>
+              <Text style={styles.sectionSubtitle}>আপনার ডেটা ক্লাউডে নিরাপদে সংরক্ষণ করুন</Text>
+            </View>
+          </View>
+
+          <View style={styles.statsRow}>
+            <Text style={styles.statsLabel}>সংরক্ষিত মোট নোট ও উপলব্ধি:</Text>
+            <Text style={styles.statsValue}>{totalCount}টি</Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.backupButton}
+            onPress={handleBackupToGoogleDrive}
+            disabled={isExporting}
+            activeOpacity={0.85}
+          >
+            {isExporting ? (
+              <ActivityIndicator color={Colors.textInverse} size="small" />
+            ) : (
+              <>
+                <Ionicons name="logo-google" size={18} color={Colors.textInverse} />
+                <Text style={styles.backupButtonText}>গুগল ড্রাইভে ব্যাকআপ রাখুন</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.restoreButton}
+            onPress={handleRestoreFromGoogleDrive}
+            disabled={isRestoring}
+            activeOpacity={0.85}
+          >
+            {isRestoring ? (
+              <ActivityIndicator color={Colors.primary} size="small" />
+            ) : (
+              <>
+                <Ionicons name="cloud-download-outline" size={18} color={Colors.primary} />
+                <Text style={styles.restoreButtonText}>গুগল ড্রাইভ ব্যাকআপ থেকে রিস্টোর</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Gemini AI API Key Configuration */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.iconCircleGold}>
+              <Ionicons name="key-outline" size={20} color={Colors.accentDark} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>Google Gemini API Key</Text>
+              <Text style={styles.sectionSubtitle}>স্বয়ংক্রিয় ভয়েস ট্রান্সক্রিপশন ও সামারির জন্য</Text>
+            </View>
+          </View>
+
+          <Text style={styles.securityNote}>
+            🔒 <Text style={{ fontWeight: 'bold' }}>নিরাপত্তা নিশ্চয়তা:</Text> আপনার API Key কোনো অনলাইন ডাটাবেজে রাখা হয় না, বরং সরাসরি আপনার মোবাইলের এনক্রিপ্টেড KeyStore/Keychain এ সংরক্ষিত থাকে।
+          </Text>
+
+          <TextInput
+            style={styles.keyInput}
+            value={apiKey}
+            onChangeText={setApiKey}
+            placeholder="AIzaSy... (Gemini API Key পেস্ট করুন)"
+            placeholderTextColor={Colors.textMuted}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <TouchableOpacity
+            style={styles.saveKeyButton}
+            onPress={handleSaveApiKey}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.saveKeyButtonText}>
+              {savedKeyExists ? 'API Key আপডেট করুন' : 'API Key সংরক্ষণ করুন'}
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={styles.guideText}>
+            💡 কিভাবে পাবেন? Google AI Studio (aistudio.google.com) থেকে সম্পূর্ণ বিনামূল্যে এক মিনিটের মধ্যে ব্যক্তিগত API Key নেওয়া যায়।
+          </Text>
+        </View>
+
+        {/* Sample Demo Data */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.iconCircleEmerald}>
+              <Ionicons name="sparkles-outline" size={20} color={Colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>নমুনা উপলব্ধি (Demo Data)</Text>
+              <Text style={styles.sectionSubtitle}>অ্যাপের কার্যকারিতা দেখার জন্য নমুনা ডেটা</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={styles.sampleButton}
+            onPress={handleSeedSampleData}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="add-circle-outline" size={18} color={Colors.primary} />
+            <Text style={styles.sampleButtonText}>৩টি নমুনা উপলব্ধি যুক্ত করুন</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* About & Privacy */}
+        <View style={styles.aboutBox}>
+          <Text style={styles.appName}>ইবরা (Ibrah) — ভার্সন ১.০.০</Text>
+          <Text style={styles.appDescription}>
+            ব্যক্তিগত প্রজ্ঞা, আত্মশুদ্ধি ও দৈনন্দিন শিক্ষার নিরিবিলি সঙ্গী। আপনার সমস্ত চিন্তা ও অডিও সম্পূর্ণ আপনার ডিভাইসে সুরক্ষিত থাকে।
+          </Text>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  content: {
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    paddingBottom: Spacing.xxxl * 2,
+  },
+  sectionCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  iconCircleEmerald: {
+    width: 40,
+    height: 40,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.primaryFaded,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconCircleGold: {
+    width: 40,
+    height: 40,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.accentLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionTitle: {
+    fontSize: Typography.fontSizes.md,
+    fontWeight: Typography.fontWeights.bold,
+    color: Colors.text,
+  },
+  sectionSubtitle: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.textSecondary,
+    marginTop: 1,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.borderLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: BorderRadius.md,
+    marginBottom: Spacing.md,
+  },
+  statsLabel: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.textSecondary,
+  },
+  statsValue: {
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.bold,
+    color: Colors.primary,
+  },
+  backupButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    gap: 8,
+    marginBottom: Spacing.sm,
+  },
+  backupButtonText: {
+    color: Colors.textInverse,
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  restoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    gap: 8,
+  },
+  restoreButtonText: {
+    color: Colors.primary,
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  securityNote: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+    backgroundColor: Colors.primaryFaded,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    marginBottom: Spacing.md,
+  },
+  keyInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    fontSize: Typography.fontSizes.sm,
+    color: Colors.text,
+    marginBottom: Spacing.md,
+  },
+  saveKeyButton: {
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+  },
+  saveKeyButtonText: {
+    color: Colors.textInverse,
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  guideText: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.textMuted,
+    lineHeight: 18,
+    marginTop: Spacing.sm,
+  },
+  sampleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primaryFaded,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.primaryBorder,
+    gap: 8,
+  },
+  sampleButtonText: {
+    color: Colors.primary,
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.semibold,
+  },
+  aboutBox: {
+    alignItems: 'center',
+    paddingVertical: Spacing.lg,
+  },
+  appName: {
+    fontSize: Typography.fontSizes.sm,
+    fontWeight: Typography.fontWeights.bold,
+    color: Colors.primary,
+    marginBottom: 4,
+  },
+  appDescription: {
+    fontSize: Typography.fontSizes.xs,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 18,
+    maxWidth: 280,
+  },
+});

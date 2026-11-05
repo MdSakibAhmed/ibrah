@@ -1,25 +1,43 @@
 {
   "expo": {
-    "name": "note-taker",
-    "slug": "note-taker",
+    "name": "ইবরা - Ibrah",
+    "slug": "ibrah",
+    "scheme": "ibrah",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "ইবরা অ্যাপে আপনার ব্যক্তিগত উপলব্ধি ও লার্নিং ভয়েস রেকর্ড করার জন্য মাইক্রোফোন পারমিশন প্রয়োজন।"
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0F382E",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-audio",
+      "expo-sharing",
+      "expo-font",
+      "expo-asset"
+    ]
   }
 }
