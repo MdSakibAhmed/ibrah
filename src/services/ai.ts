@@ -4,7 +4,7 @@ import { AIAnalysisResult } from '../types/reflection';
 import { SecurityService } from './securityService';
 
 const GEMINI_API_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent';
 
 const SYSTEM_PROMPT = `
 তুমি "ইবরা" (Ibrah) অ্যাপের ব্যক্তিগত আত্মশুদ্ধি ও লাইফ-লার্নিং অ্যাসিস্ট্যান্ট।
