@@ -24,7 +24,6 @@ import {
 import { WaveformIndicator } from '../components/WaveformIndicator';
 import { AIService } from '../services/ai';
 import { DatabaseService } from '../services/database';
-import { SecurityService } from '../services/securityService';
 import { SyncService } from '../services/syncService';
 import { Colors, Spacing, Typography, BorderRadius } from '../constants/theme';
 
@@ -179,17 +178,16 @@ export default function RecordScreen() {
       setProcessingStatus('AI এর মাধ্যমে আপনার কথা শুনে শিক্ষা ও সারসংক্ষেপ তৈরি হচ্ছে...');
 
       let aiResult;
+      let usedFallback = false;
       try {
         aiResult = await AIService.analyzeAudio(permanentUri);
       } catch (aiErr: any) {
         console.warn('[RecordScreen] AI processing failed, saving default note:', aiErr);
-        // Fallback: save voice note safely without losing user's audio
+        usedFallback = true;
         aiResult = AIService.generateDefaultTemplate();
       }
 
-      setProcessingStatus('নোটটি ডাটাবেজে সংরক্ষণ করা হচ্ছে...');
-
-      const saved = await DatabaseService.saveReflection({
+      await saveAndSyncReflection({
         title: aiResult.title,
         rawTranscript: aiResult.rawTranscript || '',
         story: aiResult.story,
@@ -198,18 +196,10 @@ export default function RecordScreen() {
         summary: aiResult.summary,
         category: aiResult.category,
         tags: aiResult.tags,
-        audioUri: permanentUri,
+        audioUri: Platform.OS === 'web' ? null : permanentUri,
         audioDurationSeconds: durationSeconds,
-        isFavorite: false,
+        usedFallback,
       });
-
-      // Background push to cloud sync
-      SyncService.pushReflection(saved).catch((e) =>
-        console.warn('[RecordScreen] Background push failed:', e)
-      );
-
-      setIsProcessing(false);
-      router.replace(`/reflection/${saved.id}`);
     } catch (error: any) {
       setIsProcessing(false);
       console.error('[RecordScreen] Processing error:', error);
@@ -218,6 +208,49 @@ export default function RecordScreen() {
         error?.message || 'ভয়েস প্রসেস ও সংরক্ষণ করতে সমস্যা হয়েছে।'
       );
     }
+  };
+
+  const saveAndSyncReflection = async (params: {
+    title: string;
+    rawTranscript: string;
+    story: string;
+    learning: string;
+    actionCommitment: string;
+    summary: string;
+    category: string;
+    tags: string[];
+    audioUri: string | null;
+    audioDurationSeconds: number;
+    usedFallback: boolean;
+  }) => {
+    setProcessingStatus('নোটটি ডাটাবেজে সংরক্ষণ করা হচ্ছে...');
+
+    const saved = await DatabaseService.saveReflection({
+      title: params.title,
+      rawTranscript: params.rawTranscript,
+      story: params.story,
+      learning: params.learning,
+      actionCommitment: params.actionCommitment,
+      summary: params.summary,
+      category: params.category,
+      tags: params.tags,
+      audioUri: params.audioUri,
+      audioDurationSeconds: params.audioDurationSeconds,
+      isFavorite: false,
+    });
+
+    SyncService.pushReflection(saved).catch((e) =>
+      console.warn('[RecordScreen] Background push failed:', e)
+    );
+
+    setIsProcessing(false);
+    if (params.usedFallback && Platform.OS !== 'web') {
+      Alert.alert(
+        'সুরক্ষিতভাবে সংরক্ষিত',
+        'নোটটি সংরক্ষিত হয়েছে, তবে AI সার্ভিস সাময়িকভাবে ব্যস্ত থাকায় স্বয়ংক্রিয় সামারি তৈরি হয়নি। পরে এডিট বাটনে গিয়ে আপডেট করতে পারবেন।'
+      );
+    }
+    router.replace(`/reflection/${saved.id}`);
   };
 
   const processManualText = async () => {
@@ -231,14 +264,16 @@ export default function RecordScreen() {
       setProcessingStatus('AI বিশ্লেষণ করছে ও প্রজ্ঞা আলাদা করছে...');
 
       let aiResult;
+      let usedFallback = false;
       try {
         aiResult = await AIService.analyzeText(manualText);
       } catch (aiErr) {
         console.warn('[RecordScreen] AI text analysis failed, using fallback:', aiErr);
+        usedFallback = true;
         aiResult = AIService.generateDefaultTemplate(manualText);
       }
 
-      const saved = await DatabaseService.saveReflection({
+      await saveAndSyncReflection({
         title: aiResult.title,
         rawTranscript: manualText,
         story: aiResult.story || manualText,
@@ -249,16 +284,8 @@ export default function RecordScreen() {
         tags: aiResult.tags,
         audioUri: null,
         audioDurationSeconds: 0,
-        isFavorite: false,
+        usedFallback,
       });
-
-      // Background push to cloud sync
-      SyncService.pushReflection(saved).catch((e) =>
-        console.warn('[RecordScreen] Background push failed:', e)
-      );
-
-      setIsProcessing(false);
-      router.replace(`/reflection/${saved.id}`);
     } catch (error: any) {
       setIsProcessing(false);
       Alert.alert('সংরক্ষণ ত্রুটি', error?.message || 'নোট সংরক্ষণ করতে সমস্যা হয়েছে।');

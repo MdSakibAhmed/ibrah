@@ -7,7 +7,69 @@ let supabaseClient: SupabaseClient | null = null;
 let activeChannel: any = null;
 let isSyncing = false;
 let lastSyncedTime: string | null = null;
-const listeners = new Set<(status: { isSyncing: boolean; lastSyncedTime: string | null }) => void>();
+const statusListeners = new Set<(status: { isSyncing: boolean; lastSyncedTime: string | null }) => void>();
+const changeListeners = new Set<() => void>();
+
+function normalizeIso(value: string | number | undefined | null): string {
+  if (!value) return new Date().toISOString();
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
+function parseTags(rawTags: unknown): string[] {
+  if (Array.isArray(rawTags)) {
+    return rawTags.filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
+  }
+  if (typeof rawTags === 'string') {
+    try {
+      const parsed = JSON.parse(rawTags);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function toCloudRow(r: Reflection, syncUserId: string) {
+  return {
+    id: r.id,
+    sync_user_id: syncUserId,
+    title: r.title,
+    raw_transcript: r.rawTranscript || '',
+    story: r.story,
+    learning: r.learning,
+    action_commitment: r.actionCommitment || '',
+    summary: r.summary,
+    category: r.category,
+    tags: Array.isArray(r.tags) ? r.tags : [],
+    audio_duration_seconds: Math.round(Number(r.audioDurationSeconds) || 0),
+    is_favorite: Boolean(r.isFavorite),
+    created_at: normalizeIso(r.createdAt),
+    updated_at: normalizeIso(r.updatedAt),
+  };
+}
+
+function fromCloudRow(row: any): Reflection {
+  return {
+    id: String(row.id),
+    title: String(row.title || ''),
+    rawTranscript: String(row.raw_transcript || ''),
+    story: String(row.story || ''),
+    learning: String(row.learning || ''),
+    actionCommitment: String(row.action_commitment || ''),
+    summary: String(row.summary || ''),
+    category: String(row.category || 'সাধারণ উপলব্ধি'),
+    tags: parseTags(row.tags),
+    audioUri: null, // Device-local audio files stay on the originating device
+    audioDurationSeconds: Math.round(Number(row.audio_duration_seconds) || 0),
+    isFavorite: Boolean(row.is_favorite),
+    createdAt: normalizeIso(row.created_at),
+    updatedAt: normalizeIso(row.updated_at),
+  };
+}
 
 export class SyncService {
   /**
@@ -48,7 +110,7 @@ export class SyncService {
   static async configure(url: string, anonKey: string, syncUserId: string): Promise<boolean> {
     const s1 = await SecurityService.saveSupabaseConfig(url, anonKey);
     const s2 = await SecurityService.saveSyncUserId(syncUserId);
-    supabaseClient = null; // reset client to re-initialize
+    supabaseClient = null;
     if (activeChannel) {
       activeChannel.unsubscribe();
       activeChannel = null;
@@ -71,29 +133,47 @@ export class SyncService {
   /**
    * Subscribe to UI sync status changes
    */
-  static subscribeStatus(callback: (status: { isSyncing: boolean; lastSyncedTime: string | null }) => void): () => void {
-    listeners.add(callback);
+  static subscribeStatus(
+    callback: (status: { isSyncing: boolean; lastSyncedTime: string | null }) => void
+  ): () => void {
+    statusListeners.add(callback);
     callback({ isSyncing, lastSyncedTime });
     return () => {
-      listeners.delete(callback);
+      statusListeners.delete(callback);
     };
   }
 
-  private static notifyListeners(): void {
-    listeners.forEach((cb) => cb({ isSyncing, lastSyncedTime }));
+  /**
+   * Subscribe to remote data changes (INSERT/UPDATE/DELETE)
+   */
+  static subscribeChanges(callback: () => void): () => void {
+    changeListeners.add(callback);
+    return () => {
+      changeListeners.delete(callback);
+    };
+  }
+
+  private static notifyStatusListeners(): void {
+    statusListeners.forEach((cb) => cb({ isSyncing, lastSyncedTime }));
+  }
+
+  private static notifyChangeListeners(): void {
+    changeListeners.forEach((cb) => cb());
   }
 
   /**
    * Initialize real-time listener for multi-device sync
    */
-  static async initRealtime(onNewReflection?: (r: Reflection) => void): Promise<void> {
+  static async initRealtime(onDataChanged?: () => void): Promise<() => void> {
+    const unsubscribeChange = onDataChanged ? this.subscribeChanges(onDataChanged) : () => {};
+
     const client = await this.getClient();
     const syncUserId = await SecurityService.getSyncUserId();
-    if (!client || !syncUserId || activeChannel) return;
+    if (!client || !syncUserId || activeChannel) return unsubscribeChange;
 
     try {
       activeChannel = client
-        .channel('ibrah_realtime_sync')
+        .channel(`ibrah_sync_${syncUserId}`)
         .on(
           'postgres_changes',
           {
@@ -104,29 +184,12 @@ export class SyncService {
           },
           async (payload) => {
             if (payload.new && (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE')) {
-              const row: any = payload.new;
-              const reflection: Reflection = {
-                id: row.id,
-                title: row.title,
-                rawTranscript: row.raw_transcript || '',
-                story: row.story,
-                learning: row.learning,
-                actionCommitment: row.action_commitment || '',
-                summary: row.summary,
-                category: row.category,
-                tags: Array.isArray(row.tags) ? row.tags : [],
-                audioUri: row.audio_uri || null,
-                audioDurationSeconds: row.audio_duration_seconds || 0,
-                isFavorite: Boolean(row.is_favorite),
-                createdAt: row.created_at,
-                updatedAt: row.updated_at,
-                backupStatus: 'synced',
-              };
-
+              const reflection = fromCloudRow(payload.new);
               await DatabaseService.importReflections([reflection]);
-              if (onNewReflection) onNewReflection(reflection);
+              this.notifyChangeListeners();
             } else if (payload.eventType === 'DELETE' && payload.old?.id) {
-              await DatabaseService.deleteReflection(payload.old.id);
+              await DatabaseService.deleteReflection(String(payload.old.id));
+              this.notifyChangeListeners();
             }
           }
         )
@@ -134,10 +197,12 @@ export class SyncService {
     } catch (err) {
       console.error('[SyncService] Realtime subscription error:', err);
     }
+
+    return unsubscribeChange;
   }
 
   /**
-   * Push a single reflection to the cloud immediately upon creation or edit
+   * Push a single reflection (new, edited, or favorited) to the cloud immediately
    */
   static async pushReflection(reflection: Reflection): Promise<boolean> {
     const client = await this.getClient();
@@ -145,26 +210,9 @@ export class SyncService {
     if (!client || !syncUserId) return false;
 
     try {
-      const { error } = await client.from('reflections').upsert(
-        {
-          id: reflection.id,
-          sync_user_id: syncUserId,
-          title: reflection.title,
-          raw_transcript: reflection.rawTranscript || '',
-          story: reflection.story,
-          learning: reflection.learning,
-          action_commitment: reflection.actionCommitment || '',
-          summary: reflection.summary,
-          category: reflection.category,
-          tags: reflection.tags || [],
-          audio_uri: reflection.audioUri || null,
-          audio_duration_seconds: reflection.audioDurationSeconds || 0,
-          is_favorite: reflection.isFavorite,
-          created_at: reflection.createdAt,
-          updated_at: reflection.updatedAt,
-        },
-        { onConflict: 'id' }
-      );
+      const { error } = await client
+        .from('reflections')
+        .upsert(toCloudRow(reflection, syncUserId), { onConflict: 'id' });
 
       if (error) {
         console.error('[SyncService] Push reflection error:', error.message);
@@ -178,7 +226,33 @@ export class SyncService {
   }
 
   /**
-   * Perform bidirectional sync between Local Device (SQLite / Web) and Supabase Cloud
+   * Delete a reflection from the cloud so it is removed across all synced devices
+   */
+  static async deleteReflection(id: string): Promise<boolean> {
+    const client = await this.getClient();
+    const syncUserId = await SecurityService.getSyncUserId();
+    if (!client || !syncUserId) return false;
+
+    try {
+      const { error } = await client
+        .from('reflections')
+        .delete()
+        .eq('id', id)
+        .eq('sync_user_id', syncUserId);
+
+      if (error) {
+        console.error('[SyncService] Delete reflection error:', error.message);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[SyncService] Failed to delete reflection:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Timestamp-aware bidirectional sync between Local Device and Supabase Cloud
    */
   static async syncAll(): Promise<{
     success: boolean;
@@ -203,43 +277,10 @@ export class SyncService {
     }
 
     isSyncing = true;
-    this.notifyListeners();
+    this.notifyStatusListeners();
 
     try {
-      // Step 1: Upload local reflections to cloud
-      const localReflections = await DatabaseService.getAllForBackup();
-      let uploaded = 0;
-
-      if (localReflections.length > 0) {
-        const rowsToUpsert = localReflections.map((r) => ({
-          id: r.id,
-          sync_user_id: syncUserId,
-          title: r.title,
-          raw_transcript: r.rawTranscript || '',
-          story: r.story,
-          learning: r.learning,
-          action_commitment: r.actionCommitment || '',
-          summary: r.summary,
-          category: r.category,
-          tags: r.tags || [],
-          audio_uri: r.audioUri || null,
-          audio_duration_seconds: r.audioDurationSeconds || 0,
-          is_favorite: r.isFavorite,
-          created_at: r.createdAt,
-          updated_at: r.updatedAt,
-        }));
-
-        const { error: uploadError } = await client
-          .from('reflections')
-          .upsert(rowsToUpsert, { onConflict: 'id' });
-
-        if (uploadError) {
-          throw new Error(`ক্লাউডে আপলোড ব্যর্থ: ${uploadError.message}`);
-        }
-        uploaded = localReflections.length;
-      }
-
-      // Step 2: Download reflections from cloud for this syncUserId
+      // Step 1: Fetch current cloud rows for this syncUserId
       const { data: cloudRows, error: downloadError } = await client
         .from('reflections')
         .select('*')
@@ -250,26 +291,37 @@ export class SyncService {
         throw new Error(`ক্লাউড থেকে ডেটা আনা যায়নি: ${downloadError.message}`);
       }
 
-      let downloaded = 0;
-      if (cloudRows && cloudRows.length > 0) {
-        const cloudReflections: Reflection[] = cloudRows.map((row: any) => ({
-          id: row.id,
-          title: row.title,
-          rawTranscript: row.raw_transcript || '',
-          story: row.story,
-          learning: row.learning,
-          actionCommitment: row.action_commitment || '',
-          summary: row.summary,
-          category: row.category,
-          tags: Array.isArray(row.tags) ? row.tags : [],
-          audioUri: row.audio_uri || null,
-          audioDurationSeconds: row.audio_duration_seconds || 0,
-          isFavorite: Boolean(row.is_favorite),
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          backupStatus: 'synced',
-        }));
+      const cloudReflections = (cloudRows || []).map(fromCloudRow);
+      const cloudUpdatedMap = new Map<string, number>();
+      cloudReflections.forEach((r) => {
+        cloudUpdatedMap.set(r.id, new Date(r.updatedAt).getTime());
+      });
 
+      // Step 2: Push only new or strictly newer local reflections to cloud
+      const localReflections = await DatabaseService.getAllReflections();
+      const rowsToUpsert = localReflections
+        .filter((local) => {
+          const remoteTime = cloudUpdatedMap.get(local.id);
+          if (remoteTime === undefined) return true;
+          return new Date(local.updatedAt).getTime() > remoteTime;
+        })
+        .map((r) => toCloudRow(r, syncUserId));
+
+      let uploaded = 0;
+      if (rowsToUpsert.length > 0) {
+        const { error: uploadError } = await client
+          .from('reflections')
+          .upsert(rowsToUpsert, { onConflict: 'id' });
+
+        if (uploadError) {
+          throw new Error(`ক্লাউডে আপলোড ব্যর্থ: ${uploadError.message}`);
+        }
+        uploaded = rowsToUpsert.length;
+      }
+
+      // Step 3: Merge newer/missing cloud reflections into local database
+      let downloaded = 0;
+      if (cloudReflections.length > 0) {
         const { imported, updated } = await DatabaseService.importReflections(cloudReflections);
         downloaded = imported + updated;
       }
@@ -295,39 +347,47 @@ export class SyncService {
       };
     } finally {
       isSyncing = false;
-      this.notifyListeners();
+      this.notifyStatusListeners();
     }
   }
 
   /**
-   * Get the SQL schema needed to setup the Supabase table with RLS
+   * Final production SQL schema for Supabase (matches every synced column cleanly)
    */
   static getSetupSQL(): string {
-    return `-- ইবরা (Ibrah) ক্লাউড সিঙ্ক টেবিল ও সিকিউরিটি কনফিগারেশন:
-CREATE TABLE IF NOT EXISTS reflections (
+    return `-- ইবরা (Ibrah) ক্লাউড সিঙ্ক টেবিলের চূড়ান্ত স্কিমা:
+-- (পুরানো ভুল স্কিমা থাকলে প্রথমে ড্রপ করে পরিষ্কারভাবে তৈরি করতে পারেন)
+-- DROP TABLE IF EXISTS public.reflections CASCADE;
+
+CREATE TABLE IF NOT EXISTS public.reflections (
   id TEXT PRIMARY KEY,
   sync_user_id TEXT NOT NULL,
   title TEXT NOT NULL,
-  raw_transcript TEXT,
+  raw_transcript TEXT NOT NULL DEFAULT '',
   story TEXT NOT NULL,
   learning TEXT NOT NULL,
-  action_commitment TEXT,
+  action_commitment TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL,
   category TEXT NOT NULL,
   tags JSONB NOT NULL DEFAULT '[]'::jsonb,
-  audio_uri TEXT,
-  audio_duration_seconds REAL DEFAULT 0,
-  is_favorite BOOLEAN DEFAULT false,
-  created_at BIGINT NOT NULL,
-  updated_at BIGINT NOT NULL
+  audio_duration_seconds INTEGER NOT NULL DEFAULT 0,
+  is_favorite BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- দ্রুত ফিল্টারিংয়ের জন্য ইনডেক্স
-CREATE INDEX IF NOT EXISTS idx_reflections_sync_user ON reflections(sync_user_id);
-CREATE INDEX IF NOT EXISTS idx_reflections_created ON reflections(created_at);
+-- দ্রুত সার্চ ও সিঙ্কের জন্য ইনডেক্স
+CREATE INDEX IF NOT EXISTS idx_reflections_sync_user ON public.reflections(sync_user_id);
+CREATE INDEX IF NOT EXISTS idx_reflections_created ON public.reflections(created_at DESC);
 
--- রিয়েল-টাইম পাবলিকেশন সক্রিয় করুন
-ALTER PUBLICATION supabase_realtime ADD TABLE reflections;
+-- রিয়েল-টাইম DELETE ও UPDATE ফিল্টারিং সঠিকভাবে কাজ করার জন্য:
+ALTER TABLE public.reflections REPLICA IDENTITY FULL;
+
+-- Sync Key ভিত্তিক অ্যাক্সেসের জন্য RLS বন্ধ রাখুন:
+ALTER TABLE public.reflections DISABLE ROW LEVEL SECURITY;
+
+-- রিয়েল-টাইম সিঙ্ক চালু করুন:
+ALTER PUBLICATION supabase_realtime ADD TABLE public.reflections;
 `;
   }
 }

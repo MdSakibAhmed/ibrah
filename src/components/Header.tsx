@@ -74,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
             style={styles.iconButton}
             onPress={() => router.push('/settings')}
             activeOpacity={0.7}
-            accessibilityLabel="সেটিংস ও ব্যাকআপ"
+            accessibilityLabel="সেটিংস ও সিঙ্ক"
           >
             <Ionicons name="settings-outline" size={21} color={Colors.primary} />
           </TouchableOpacity>

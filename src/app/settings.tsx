@@ -14,7 +14,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../components/Header';
 import { SecurityService } from '../services/securityService';
-import { BackupService } from '../services/backupService';
 import { DatabaseService } from '../services/database';
 import { SyncService } from '../services/syncService';
 import { Colors, Spacing, Typography, BorderRadius } from '../constants/theme';
@@ -23,8 +22,6 @@ export default function SettingsScreen() {
   const [apiKey, setApiKey] = useState<string>('');
   const [savedKeyExists, setSavedKeyExists] = useState<boolean>(false);
   const [totalCount, setTotalCount] = useState<number>(0);
-  const [isExporting, setIsExporting] = useState<boolean>(false);
-  const [isRestoring, setIsRestoring] = useState<boolean>(false);
 
   // Cloud Sync state
   const [supabaseUrl, setSupabaseUrl] = useState<string>('');
@@ -135,39 +132,6 @@ export default function SettingsScreen() {
     ]);
   };
 
-  const handleBackupToGoogleDrive = async () => {
-    setIsExporting(true);
-    try {
-      const result = await BackupService.exportToGoogleDrive();
-      if (result.success) {
-        Alert.alert('ব্যাকআপ সম্পন্ন', result.message);
-      } else {
-        Alert.alert('ব্যাকআপ সতর্কতা', result.message);
-      }
-    } catch (err: any) {
-      Alert.alert('ত্রুটি', 'ব্যাকআপে সমস্যা হয়েছে: ' + (err?.message || ''));
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const handleRestoreFromGoogleDrive = async () => {
-    setIsRestoring(true);
-    try {
-      const result = await BackupService.restoreFromGoogleDrive();
-      if (result.success) {
-        Alert.alert('রিস্টোর সম্পন্ন', result.message);
-        loadSettings();
-      } else {
-        Alert.alert('রিস্টোর নোটিশ', result.message);
-      }
-    } catch (err: any) {
-      Alert.alert('ত্রুটি', 'রিস্টোর করতে সমস্যা হয়েছে: ' + (err?.message || ''));
-    } finally {
-      setIsRestoring(false);
-    }
-  };
-
   const handleSeedSampleData = async () => {
     Alert.alert(
       'ডেমো ডেটা যুক্ত করুন',
@@ -178,7 +142,7 @@ export default function SettingsScreen() {
           text: 'হ্যাঁ, যুক্ত করুন',
           onPress: async () => {
             try {
-              await DatabaseService.saveReflection({
+              const s1 = await DatabaseService.saveReflection({
                 title: 'স্ত্রীর সাথে মতভিন্নতায় তাৎক্ষণিক নীরবতার বরকত',
                 rawTranscript:
                   'আজকে বাসায় ফেরার পর ছোট একটি বিষয় নিয়ে স্ত্রীর সাথে তর্ক হওয়ার সম্ভাবনা ছিল। কিন্তু মনে হলো রাগ প্রকাশ না করে কিছুক্ষণ চুপ থাকা শ্রেয়।',
@@ -196,7 +160,7 @@ export default function SettingsScreen() {
                 isFavorite: true,
               });
 
-              await DatabaseService.saveReflection({
+              const s2 = await DatabaseService.saveReflection({
                 title: 'জুমার বয়ান: অন্যের দোষ খোঁজার চেয়ে আত্মশুদ্ধির গুরুত্ব',
                 rawTranscript:
                   'জুমার মসজিদে খতিব সাহেব বলছিলেন আমরা অন্যের ছোট ছোট ভুল নিয়ে কথা বলি কিন্তু নিজের অন্তরের অহংকার দেখতে পাই না।',
@@ -214,7 +178,7 @@ export default function SettingsScreen() {
                 isFavorite: true,
               });
 
-              await DatabaseService.saveReflection({
+              const s3 = await DatabaseService.saveReflection({
                 title: 'কাজের জায়গায় কোনো সহকর্মীর ভুল ক্ষমাসুন্দর দৃষ্টিতে দেখা',
                 rawTranscript:
                   'আজ অফিসে জুনিয়র সহকর্মী বড় একটা ভুল করেছিল। প্রথমে রেগে গিয়েছিলাম, কিন্তু পরে শান্তভাবে তাকে বুঝিয়ে বললাম।',
@@ -232,6 +196,12 @@ export default function SettingsScreen() {
                 isFavorite: false,
               });
 
+              Promise.allSettled([
+                SyncService.pushReflection(s1),
+                SyncService.pushReflection(s2),
+                SyncService.pushReflection(s3),
+              ]);
+
               await loadSettings();
               Alert.alert('সফল', '৩টি নমুনা উপলব্ধি যুক্ত করা হয়েছে। হোম স্ক্রিনে গিয়ে দেখুন।');
             } catch (err) {
@@ -245,7 +215,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <Header title="সেটিংস ও সিঙ্ক" subtitle="মোবাইল-ওয়েব সিঙ্ক ও ব্যাকআপ" showBack rightAction="none" />
+      <Header title="সেটিংস ও সিঙ্ক" subtitle="মোবাইল-ওয়েব রিয়েল-টাইম সিঙ্ক ও AI" showBack rightAction="none" />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* 1. Real-Time Cloud Sync Section (Mobile & Web) */}
@@ -272,6 +242,11 @@ export default function SettingsScreen() {
                 ? `স্বয়ংক্রিয় সিঙ্ক সক্রিয় ${lastSyncText ? `(সর্বশেষ: ${lastSyncText})` : ''}`
                 : 'সিঙ্ক কনফিগার করা হয়নি'}
             </Text>
+          </View>
+
+          <View style={styles.statsRow}>
+            <Text style={styles.statsLabel}>সংরক্ষিত মোট নোট ও উপলব্ধি:</Text>
+            <Text style={styles.statsValue}>{totalCount}টি</Text>
           </View>
 
           <Text style={styles.sectionHelpText}>
@@ -356,57 +331,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* 2. Google Drive Manual Backup Section */}
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHeaderRow}>
-            <View style={styles.iconCircleGold}>
-              <Ionicons name="cloud-upload-outline" size={20} color={Colors.accentDark} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sectionTitle}>গুগল ড্রাইভ ব্যাকআপ (ম্যানুয়াল)</Text>
-              <Text style={styles.sectionSubtitle}>আপনার ডেটা ক্লাউডে অফলাইন ব্যাকআপ ফাইল হিসেবে সংরক্ষণ</Text>
-            </View>
-          </View>
-
-          <View style={styles.statsRow}>
-            <Text style={styles.statsLabel}>সংরক্ষিত মোট নোট ও উপলব্ধি:</Text>
-            <Text style={styles.statsValue}>{totalCount}টি</Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.backupButton}
-            onPress={handleBackupToGoogleDrive}
-            disabled={isExporting}
-            activeOpacity={0.85}
-          >
-            {isExporting ? (
-              <ActivityIndicator color={Colors.textInverse} size="small" />
-            ) : (
-              <>
-                <Ionicons name="logo-google" size={18} color={Colors.textInverse} />
-                <Text style={styles.backupButtonText}>গুগল ড্রাইভে ব্যাকআপ রাখুন</Text>
-              </>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.restoreButton}
-            onPress={handleRestoreFromGoogleDrive}
-            disabled={isRestoring}
-            activeOpacity={0.85}
-          >
-            {isRestoring ? (
-              <ActivityIndicator color={Colors.primary} size="small" />
-            ) : (
-              <>
-                <Ionicons name="cloud-download-outline" size={18} color={Colors.primary} />
-                <Text style={styles.restoreButtonText}>গুগল ড্রাইভ ব্যাকআপ থেকে রিস্টোর</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* 3. Gemini AI API Key Configuration */}
+        {/* 2. Gemini AI API Key Configuration */}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
             <View style={styles.iconCircleEmerald}>
@@ -684,37 +609,6 @@ const styles = StyleSheet.create({
     fontSize: Typography.fontSizes.sm,
     fontWeight: Typography.fontWeights.bold,
     color: Colors.primary,
-  },
-  backupButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primary,
-    paddingVertical: Spacing.md,
-    borderRadius: BorderRadius.md,
-    gap: 8,
-    marginBottom: Spacing.sm,
-  },
-  backupButtonText: {
-    color: Colors.textInverse,
-    fontSize: Typography.fontSizes.sm,
-    fontWeight: Typography.fontWeights.semibold,
-  },
-  restoreButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.surface,
-    paddingVertical: Spacing.md,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    gap: 8,
-  },
-  restoreButtonText: {
-    color: Colors.primary,
-    fontSize: Typography.fontSizes.sm,
-    fontWeight: Typography.fontWeights.semibold,
   },
   securityNote: {
     fontSize: Typography.fontSizes.xs,

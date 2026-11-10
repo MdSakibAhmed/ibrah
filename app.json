@@ -39,7 +39,6 @@
       "expo-secure-store",
       "expo-sqlite",
       "expo-audio",
-      "expo-sharing",
       "expo-font",
       "expo-asset"
     ],

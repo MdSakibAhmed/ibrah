@@ -3,8 +3,19 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { AIAnalysisResult } from '../types/reflection';
 import { SecurityService } from './securityService';
 
-const GEMINI_API_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent';
+/**
+ * Prioritized Gemini multimodal models (Audio + Text supported):
+ * Starts with latest flagship Flash, then automatically fails over to Stable
+ * production models if Google returns HTTP 503 (high demand) or 429 (rate limit).
+ */
+const GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+] as const;
+
+const REQUEST_TIMEOUT_MS = 35000;
 
 const SYSTEM_PROMPT = `
 তুমি "ইবরা" (Ibrah) অ্যাপের ব্যক্তিগত আত্মশুদ্ধি ও লাইফ-লার্নিং অ্যাসিস্ট্যান্ট।
@@ -29,11 +40,33 @@ const SYSTEM_PROMPT = `
 }
 `;
 
+function buildEndpoint(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+}
+
+function isTransientOrModelError(status: number, message: string): boolean {
+  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 404) {
+    return true;
+  }
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('high demand') ||
+    lower.includes('overloaded') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('rate limit') ||
+    lower.includes('quota')
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class AIService {
   /**
-   * Process recorded audio file through Gemini Multimodal API (Mobile & Web)
+   * Shared Gemini request executor with automatic model fallback and retry
    */
-  static async analyzeAudio(audioUri: string): Promise<AIAnalysisResult> {
+  private static async generateWithFallback(parts: Array<Record<string, unknown>>): Promise<AIAnalysisResult> {
     const apiKey = await SecurityService.getApiKey();
 
     if (!apiKey) {
@@ -42,6 +75,80 @@ export class AIService {
       );
     }
 
+    const requestBody = JSON.stringify({
+      contents: [{ parts }],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: 'application/json',
+      },
+    });
+
+    let lastError: Error | null = null;
+
+    // Try up to 2 passes across the prioritized model chain
+    for (let pass = 0; pass < 2; pass++) {
+      if (pass > 0) {
+        await delay(1200);
+      }
+
+      for (const model of GEMINI_MODELS) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+        try {
+          const response = await fetch(`${buildEndpoint(model)}?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: requestBody,
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const message = errorData?.error?.message || `HTTP ${response.status}`;
+
+            if (isTransientOrModelError(response.status, message)) {
+              console.warn(`[AIService] Model ${model} busy (${response.status}), trying fallback...`);
+              lastError = new Error(`Gemini API Error (${model}): ${message}`);
+              continue;
+            }
+
+            // Fail fast on authentication / invalid API key / malformed request errors
+            throw new Error(`Gemini API Error: ${message}`);
+          }
+
+          const result = await response.json();
+          const textOutput = result?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (!textOutput) {
+            lastError = new Error(`Empty response from ${model}`);
+            continue;
+          }
+
+          return this.parseAndValidateResponse(textOutput);
+        } catch (err: any) {
+          if (err?.name === 'AbortError') {
+            console.warn(`[AIService] Model ${model} timed out, trying fallback...`);
+            lastError = new Error(`Request timeout on ${model}`);
+            continue;
+          }
+          // Re-throw non-transient fatal errors immediately
+          if (err?.message?.startsWith('Gemini API Error:') && !err.message.includes('(')) {
+            throw err;
+          }
+          lastError = err instanceof Error ? err : new Error(String(err));
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      }
+    }
+
+    throw lastError || new Error('Gemini API বর্তমানে ব্যস্ত আছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।');
+  }
+
+  /**
+   * Process recorded audio file through Gemini Multimodal API (Mobile & Web)
+   */
+  static async analyzeAudio(audioUri: string): Promise<AIAnalysisResult> {
     try {
       let base64Audio: string;
       let mimeType = 'audio/m4a';
@@ -51,7 +158,6 @@ export class AIService {
       else if (audioUri.endsWith('.aac')) mimeType = 'audio/aac';
       else if (audioUri.endsWith('.webm') || audioUri.includes('webm')) mimeType = 'audio/webm';
 
-      // On Web: audioUri is typically a blob: URL
       if (Platform.OS === 'web') {
         const resp = await fetch(audioUri);
         const blob = await resp.blob();
@@ -61,60 +167,28 @@ export class AIService {
           const reader = new FileReader();
           reader.onloadend = () => {
             const dataUrl = reader.result as string;
-            const base64 = dataUrl.split(',')[1];
-            resolve(base64);
+            resolve(dataUrl.split(',')[1]);
           };
           reader.onerror = reject;
           reader.readAsDataURL(blob);
         });
       } else {
-        // On Mobile: read file directly using FileSystem
         base64Audio = await FileSystem.readAsStringAsync(audioUri, {
           encoding: FileSystem.EncodingType.Base64,
         });
       }
 
-      const requestBody = {
-        contents: [
-          {
-            parts: [
-              {
-                text: SYSTEM_PROMPT + '\nদয়া করে নিচের সংযুক্ত অডিওটি প্রসেস করো এবং পিওর JSON তৈরি করো:',
-              },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Audio,
-                },
-              },
-            ],
+      return await this.generateWithFallback([
+        {
+          text: SYSTEM_PROMPT + '\nদয়া করে নিচের সংযুক্ত অডিওটি প্রসেস করো এবং পিওর JSON তৈরি করো:',
+        },
+        {
+          inlineData: {
+            mimeType,
+            data: base64Audio,
           },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
         },
-      };
-
-      const response = await fetch(`${GEMINI_API_ENDPOINT}?key=${apiKey}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message = errorData?.error?.message || `HTTP ${response.status}`;
-        throw new Error(`Gemini API Error: ${message}`);
-      }
-
-      const result = await response.json();
-      const textOutput =
-        result?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-      return this.parseAndValidateResponse(textOutput);
+      ]);
     } catch (error: any) {
       console.error('[AIService] Audio analysis failed:', error);
       throw error;
@@ -125,50 +199,12 @@ export class AIService {
    * Process written text/note through Gemini API
    */
   static async analyzeText(text: string): Promise<AIAnalysisResult> {
-    const apiKey = await SecurityService.getApiKey();
-
-    if (!apiKey) {
-      throw new Error(
-        'AI প্রসেসিংয়ের জন্য Gemini API Key প্রয়োজন। দয়া করে সেটিংস স্ক্রিন থেকে আপনার বিনামূল্যে পাওয়া Gemini API Key যুক্ত করুন।'
-      );
-    }
-
     try {
-      const requestBody = {
-        contents: [
-          {
-            parts: [
-              {
-                text: `${SYSTEM_PROMPT}\n\nব্যবহারকারীর লিখিত কথা:\n"${text}"\n\nউপরে দেওয়া তথ্য অনুযায়ী পিওর JSON প্রস্তুত করো:`,
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
+      return await this.generateWithFallback([
+        {
+          text: `${SYSTEM_PROMPT}\n\nব্যবহারকারীর লিখিত কথা:\n"${text}"\n\nউপরে দেওয়া তথ্য অনুযায়ী পিওর JSON প্রস্তুত করো:`,
         },
-      };
-
-      const response = await fetch(`${GEMINI_API_ENDPOINT}?key=${apiKey}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message = errorData?.error?.message || `HTTP ${response.status}`;
-        throw new Error(`Gemini API Error: ${message}`);
-      }
-
-      const result = await response.json();
-      const textOutput =
-        result?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-      return this.parseAndValidateResponse(textOutput);
+      ]);
     } catch (error: any) {
       console.error('[AIService] Text analysis failed:', error);
       throw error;
@@ -201,7 +237,7 @@ export class AIService {
   }
 
   /**
-   * Generate default template when offline or API key is absent
+   * Generate default template when offline or API is unreachable
    */
   static generateDefaultTemplate(spokenText?: string): AIAnalysisResult {
     const todayStr = new Date().toLocaleDateString('bn-BD', {
@@ -216,9 +252,11 @@ export class AIService {
       story: spokenText || 'রেকর্ডকৃত ভয়েস সংরক্ষিত রয়েছে।',
       learning: 'ভয়েসটি শুনে পরবর্তীতে আপনার মূল শিক্ষা বা উপলব্ধি এখানে নোট করতে পারেন।',
       actionCommitment: 'ভবিষ্যতে এই বিষয়ে সচেতন থাকা ও নিজেকে শুধরানো।',
-      summary: 'রেকর্ডকৃত ভয়েস নোট সংরক্ষিত হয়েছে।',
+      summary: spokenText
+        ? spokenText.slice(0, 100) + (spokenText.length > 100 ? '...' : '')
+        : 'রেকর্ডকৃত ভয়েস নোট সংরক্ষিত হয়েছে।',
       category: 'সাধারণ উপলব্ধি',
-      tags: ['ভয়েস নোট', 'আত্মশুদ্ধি'],
+      tags: ['আত্মশুদ্ধি', 'নোট'],
     };
   }
 }

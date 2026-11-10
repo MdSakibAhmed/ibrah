@@ -59,26 +59,34 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadData();
-      SyncService.isConfigured().then((configured) => setIsCloudActive(configured));
+      SyncService.isConfigured().then((configured) => {
+        setIsCloudActive(configured);
+        if (configured) {
+          SyncService.initRealtime();
+        }
+      });
     }, [loadData])
   );
 
   useEffect(() => {
-    SyncService.isConfigured().then((configured) => {
-      setIsCloudActive(configured);
-      if (configured) {
-        SyncService.initRealtime(() => {
-          loadData();
-        });
-      }
+    const unsubscribeChanges = SyncService.subscribeChanges(() => {
+      loadData();
     });
 
-    const unsubscribe = SyncService.subscribeStatus(({ isSyncing: syncing }) => {
+    const unsubscribeStatus = SyncService.subscribeStatus(({ isSyncing: syncing }) => {
       setIsSyncing(syncing);
     });
 
+    SyncService.isConfigured().then((configured) => {
+      setIsCloudActive(configured);
+      if (configured) {
+        SyncService.initRealtime();
+      }
+    });
+
     return () => {
-      unsubscribe();
+      unsubscribeChanges();
+      unsubscribeStatus();
     };
   }, [loadData]);
 
@@ -114,13 +122,19 @@ export default function HomeScreen() {
 
   const handleToggleFavorite = async (id: string) => {
     try {
-      await DatabaseService.toggleFavorite(id);
+      const updated = await DatabaseService.toggleFavorite(id);
+      if (!updated) return;
+
       setReflections((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, isFavorite: !r.isFavorite } : r))
+        prev.map((r) => (r.id === id ? updated : r))
       );
       if (dailyWisdom && dailyWisdom.id === id) {
-        setDailyWisdom({ ...dailyWisdom, isFavorite: !dailyWisdom.isFavorite });
+        setDailyWisdom(updated);
       }
+
+      SyncService.pushReflection(updated).catch((e) =>
+        console.warn('[HomeScreen] Failed to push favorite:', e)
+      );
     } catch (err) {
       console.error('[HomeScreen] Toggle favorite error:', err);
     }

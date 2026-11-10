@@ -6,6 +6,9 @@ import { SecurityService } from './securityService';
 const DB_NAME = 'ibrah_reflections.db';
 const WEB_STORAGE_KEY = 'ibrah_reflections_web_store';
 
+const SELECT_COLUMNS =
+  'id, title, raw_transcript, story, learning, action_commitment, summary, category, tags, audio_uri, audio_duration_seconds, is_favorite, created_at, updated_at';
+
 let dbInstance: SQLite.SQLiteDatabase | null = null;
 
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
@@ -16,19 +19,18 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       CREATE TABLE IF NOT EXISTS reflections (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
-        raw_transcript TEXT,
+        raw_transcript TEXT DEFAULT '',
         story TEXT NOT NULL,
         learning TEXT NOT NULL,
-        action_commitment TEXT,
+        action_commitment TEXT DEFAULT '',
         summary TEXT NOT NULL,
         category TEXT NOT NULL,
-        tags TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '[]',
         audio_uri TEXT,
-        audio_duration_seconds REAL,
+        audio_duration_seconds INTEGER DEFAULT 0,
         is_favorite INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        backup_status TEXT DEFAULT 'local'
+        updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_reflections_category ON reflections(category);
       CREATE INDEX IF NOT EXISTS idx_reflections_created_at ON reflections(created_at);
@@ -52,7 +54,12 @@ interface DBRow {
   is_favorite: number;
   created_at: string;
   updated_at: string;
-  backup_status: 'local' | 'synced' | 'pending';
+}
+
+function normalizeIsoTimestamp(value: string | number | undefined | null): string {
+  if (!value) return new Date().toISOString();
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
 function mapRowToReflection(row: DBRow): Reflection {
@@ -73,21 +80,37 @@ function mapRowToReflection(row: DBRow): Reflection {
     summary: row.summary,
     category: row.category,
     tags: Array.isArray(parsedTags) ? parsedTags : [],
-    audioUri: row.audio_uri,
-    audioDurationSeconds: row.audio_duration_seconds ?? 0,
+    audioUri: row.audio_uri || null,
+    audioDurationSeconds: Math.round(row.audio_duration_seconds ?? 0),
     isFavorite: row.is_favorite === 1,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    backupStatus: row.backup_status,
+    createdAt: normalizeIsoTimestamp(row.created_at),
+    updatedAt: normalizeIsoTimestamp(row.updated_at),
   };
 }
 
-// Web LocalStorage Helper functions
 function getWebReflections(): Reflection[] {
   if (typeof window === 'undefined' || !window.localStorage) return [];
   try {
     const raw = window.localStorage.getItem(WEB_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item: any) => ({
+      id: item.id,
+      title: item.title || '',
+      rawTranscript: item.rawTranscript || '',
+      story: item.story || '',
+      learning: item.learning || '',
+      actionCommitment: item.actionCommitment || '',
+      summary: item.summary || '',
+      category: item.category || 'সাধারণ উপলব্ধি',
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      audioUri: item.audioUri || null,
+      audioDurationSeconds: Math.round(Number(item.audioDurationSeconds) || 0),
+      isFavorite: Boolean(item.isFavorite),
+      createdAt: normalizeIsoTimestamp(item.createdAt),
+      updatedAt: normalizeIsoTimestamp(item.updatedAt),
+    }));
   } catch {
     return [];
   }
@@ -108,7 +131,6 @@ export class DatabaseService {
    */
   static async init(): Promise<void> {
     if (Platform.OS === 'web') {
-      // Ensure web store exists
       if (typeof window !== 'undefined' && window.localStorage) {
         if (!window.localStorage.getItem(WEB_STORAGE_KEY)) {
           window.localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify([]));
@@ -156,7 +178,7 @@ export class DatabaseService {
     }
 
     const db = await getDatabase();
-    let query = 'SELECT * FROM reflections WHERE 1=1';
+    let query = `SELECT ${SELECT_COLUMNS} FROM reflections WHERE 1=1`;
     const params: (string | number)[] = [];
 
     if (options?.category && options.category !== 'all') {
@@ -192,7 +214,7 @@ export class DatabaseService {
 
     const db = await getDatabase();
     const row = await db.getFirstAsync<DBRow>(
-      'SELECT * FROM reflections WHERE id = ?',
+      `SELECT ${SELECT_COLUMNS} FROM reflections WHERE id = ?`,
       [id]
     );
     if (!row) return null;
@@ -212,7 +234,7 @@ export class DatabaseService {
 
     const db = await getDatabase();
     const rows = await db.getAllAsync<DBRow>(
-      'SELECT * FROM reflections ORDER BY RANDOM() LIMIT ?',
+      `SELECT ${SELECT_COLUMNS} FROM reflections ORDER BY RANDOM() LIMIT ?`,
       [limit]
     );
     return rows.map(mapRowToReflection);
@@ -222,33 +244,38 @@ export class DatabaseService {
    * Save a new reflection
    */
   static async saveReflection(
-    reflection: Omit<Reflection, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+    reflection: Omit<Reflection, 'id' | 'createdAt' | 'updatedAt' | 'audioDurationSeconds'> & {
+      id?: string;
+      audioDurationSeconds?: number;
+    }
   ): Promise<Reflection> {
     const id = reflection.id || Date.now().toString() + '_' + Math.random().toString(36).substring(2, 7);
     const now = new Date().toISOString();
 
     const sanitizedTitle = SecurityService.sanitizeText(reflection.title);
+    const sanitizedTranscript = SecurityService.sanitizeText(reflection.rawTranscript || '');
     const sanitizedStory = SecurityService.sanitizeText(reflection.story);
     const sanitizedLearning = SecurityService.sanitizeText(reflection.learning);
     const sanitizedAction = SecurityService.sanitizeText(reflection.actionCommitment || '');
     const sanitizedSummary = SecurityService.sanitizeText(reflection.summary);
+    const duration = Math.round(reflection.audioDurationSeconds || 0);
+    const localAudioUri = Platform.OS === 'web' ? null : (reflection.audioUri || null);
 
     const newReflection: Reflection = {
       id,
       title: sanitizedTitle,
-      rawTranscript: reflection.rawTranscript || '',
+      rawTranscript: sanitizedTranscript,
       story: sanitizedStory,
       learning: sanitizedLearning,
       actionCommitment: sanitizedAction,
       summary: sanitizedSummary,
       category: reflection.category,
       tags: reflection.tags || [],
-      audioUri: reflection.audioUri || null,
-      audioDurationSeconds: reflection.audioDurationSeconds || 0,
-      isFavorite: reflection.isFavorite || false,
+      audioUri: localAudioUri,
+      audioDurationSeconds: duration,
+      isFavorite: Boolean(reflection.isFavorite),
       createdAt: now,
       updatedAt: now,
-      backupStatus: 'local',
     };
 
     if (Platform.OS === 'web') {
@@ -265,24 +292,23 @@ export class DatabaseService {
       `INSERT INTO reflections (
         id, title, raw_transcript, story, learning, action_commitment,
         summary, category, tags, audio_uri, audio_duration_seconds,
-        is_favorite, created_at, updated_at, backup_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        is_favorite, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         sanitizedTitle,
-        reflection.rawTranscript || '',
+        sanitizedTranscript,
         sanitizedStory,
         sanitizedLearning,
         sanitizedAction,
         sanitizedSummary,
         reflection.category,
         tagsJson,
-        reflection.audioUri || null,
-        reflection.audioDurationSeconds || 0,
-        reflection.isFavorite ? 1 : 0,
+        localAudioUri,
+        duration,
+        newReflection.isFavorite ? 1 : 0,
         now,
         now,
-        'local',
       ]
     );
 
@@ -290,12 +316,12 @@ export class DatabaseService {
   }
 
   /**
-   * Update an existing reflection
+   * Update an existing reflection and return the updated record for immediate sync
    */
   static async updateReflection(
     id: string,
     updates: Partial<Omit<Reflection, 'id' | 'createdAt'>>
-  ): Promise<void> {
+  ): Promise<Reflection> {
     const now = new Date().toISOString();
 
     if (Platform.OS === 'web') {
@@ -304,21 +330,28 @@ export class DatabaseService {
       if (index === -1) throw new Error('নোটটি পাওয়া যায়নি');
 
       const current = list[index];
-      list[index] = {
+      const updatedReflection: Reflection = {
         ...current,
         title: updates.title !== undefined ? SecurityService.sanitizeText(updates.title) : current.title,
+        rawTranscript:
+          updates.rawTranscript !== undefined
+            ? SecurityService.sanitizeText(updates.rawTranscript)
+            : current.rawTranscript,
         story: updates.story !== undefined ? SecurityService.sanitizeText(updates.story) : current.story,
         learning: updates.learning !== undefined ? SecurityService.sanitizeText(updates.learning) : current.learning,
-        actionCommitment: updates.actionCommitment !== undefined ? SecurityService.sanitizeText(updates.actionCommitment) : current.actionCommitment,
+        actionCommitment:
+          updates.actionCommitment !== undefined
+            ? SecurityService.sanitizeText(updates.actionCommitment)
+            : current.actionCommitment,
         summary: updates.summary !== undefined ? SecurityService.sanitizeText(updates.summary) : current.summary,
         category: updates.category !== undefined ? updates.category : current.category,
         tags: updates.tags !== undefined ? updates.tags : current.tags,
         isFavorite: updates.isFavorite !== undefined ? updates.isFavorite : current.isFavorite,
-        backupStatus: updates.backupStatus || current.backupStatus,
         updatedAt: now,
       };
+      list[index] = updatedReflection;
       setWebReflections(list);
-      return;
+      return updatedReflection;
     }
 
     const db = await getDatabase();
@@ -326,45 +359,91 @@ export class DatabaseService {
     if (!current) throw new Error('নোটটি পাওয়া যায়নি');
 
     const title = updates.title !== undefined ? SecurityService.sanitizeText(updates.title) : current.title;
+    const rawTranscript =
+      updates.rawTranscript !== undefined
+        ? SecurityService.sanitizeText(updates.rawTranscript)
+        : current.rawTranscript;
     const story = updates.story !== undefined ? SecurityService.sanitizeText(updates.story) : current.story;
     const learning = updates.learning !== undefined ? SecurityService.sanitizeText(updates.learning) : current.learning;
-    const action = updates.actionCommitment !== undefined ? SecurityService.sanitizeText(updates.actionCommitment) : current.actionCommitment;
+    const action =
+      updates.actionCommitment !== undefined
+        ? SecurityService.sanitizeText(updates.actionCommitment)
+        : current.actionCommitment;
     const summary = updates.summary !== undefined ? SecurityService.sanitizeText(updates.summary) : current.summary;
     const category = updates.category !== undefined ? updates.category : current.category;
-    const tagsJson = updates.tags !== undefined ? JSON.stringify(updates.tags) : JSON.stringify(current.tags);
-    const isFav = updates.isFavorite !== undefined ? (updates.isFavorite ? 1 : 0) : (current.isFavorite ? 1 : 0);
-    const backupStatus = updates.backupStatus || 'local';
+    const tags = updates.tags !== undefined ? updates.tags : current.tags;
+    const tagsJson = JSON.stringify(tags);
+    const isFavorite = updates.isFavorite !== undefined ? updates.isFavorite : current.isFavorite;
 
     await db.runAsync(
       `UPDATE reflections SET
-        title = ?, story = ?, learning = ?, action_commitment = ?,
-        summary = ?, category = ?, tags = ?, is_favorite = ?,
-        updated_at = ?, backup_status = ?
+        title = ?, raw_transcript = ?, story = ?, learning = ?, action_commitment = ?,
+        summary = ?, category = ?, tags = ?, is_favorite = ?, updated_at = ?
       WHERE id = ?`,
-      [title, story, learning, action, summary, category, tagsJson, isFav, now, backupStatus, id]
+      [
+        title,
+        rawTranscript,
+        story,
+        learning,
+        action,
+        summary,
+        category,
+        tagsJson,
+        isFavorite ? 1 : 0,
+        now,
+        id,
+      ]
     );
+
+    return {
+      ...current,
+      title,
+      rawTranscript,
+      story,
+      learning,
+      actionCommitment: action,
+      summary,
+      category,
+      tags,
+      isFavorite,
+      updatedAt: now,
+    };
   }
 
   /**
-   * Toggle favorite status
+   * Toggle favorite status, update timestamp, and return updated reflection for cloud sync
    */
-  static async toggleFavorite(id: string): Promise<boolean> {
+  static async toggleFavorite(id: string): Promise<Reflection | null> {
+    const now = new Date().toISOString();
+
     if (Platform.OS === 'web') {
       const list = getWebReflections();
-      const item = list.find((r) => r.id === id);
-      if (!item) return false;
-      item.isFavorite = !item.isFavorite;
+      const index = list.findIndex((r) => r.id === id);
+      if (index === -1) return null;
+      list[index] = {
+        ...list[index],
+        isFavorite: !list[index].isFavorite,
+        updatedAt: now,
+      };
       setWebReflections(list);
-      return item.isFavorite;
+      return list[index];
     }
 
     const db = await getDatabase();
     const current = await this.getReflectionById(id);
-    if (!current) return false;
+    if (!current) return null;
 
     const newFav = !current.isFavorite;
-    await db.runAsync('UPDATE reflections SET is_favorite = ? WHERE id = ?', [newFav ? 1 : 0, id]);
-    return newFav;
+    await db.runAsync('UPDATE reflections SET is_favorite = ?, updated_at = ? WHERE id = ?', [
+      newFav ? 1 : 0,
+      now,
+      id,
+    ]);
+    return {
+      ...current,
+      isFavorite: newFav,
+      updatedAt: now,
+    };
   }
 
   /**
@@ -434,20 +513,22 @@ export class DatabaseService {
   }
 
   /**
-   * Export all reflections for backup
+   * Get all reflections for synchronization
    */
-  static async getAllForBackup(): Promise<Reflection[]> {
+  static async getAllReflections(): Promise<Reflection[]> {
     if (Platform.OS === 'web') {
       return getWebReflections();
     }
 
     const db = await getDatabase();
-    const rows = await db.getAllAsync<DBRow>('SELECT * FROM reflections ORDER BY created_at ASC');
+    const rows = await db.getAllAsync<DBRow>(
+      `SELECT ${SELECT_COLUMNS} FROM reflections ORDER BY created_at ASC`
+    );
     return rows.map(mapRowToReflection);
   }
 
   /**
-   * Import reflections safely during a restore operation
+   * Merge reflections from cloud sync (timestamp-aware and preserves device-local audioUri)
    */
   static async importReflections(reflections: Reflection[]): Promise<{ imported: number; updated: number }> {
     let imported = 0;
@@ -456,12 +537,49 @@ export class DatabaseService {
     if (Platform.OS === 'web') {
       const list = getWebReflections();
       for (const r of reflections) {
+        const incomingCreatedAt = normalizeIsoTimestamp(r.createdAt);
+        const incomingUpdatedAt = normalizeIsoTimestamp(r.updatedAt);
+        const incomingTime = new Date(incomingUpdatedAt).getTime();
+
         const idx = list.findIndex((item) => item.id === r.id);
         if (idx !== -1) {
-          list[idx] = { ...r, backupStatus: 'synced' };
-          updated++;
+          const existingTime = new Date(list[idx].updatedAt).getTime();
+          if (incomingTime >= existingTime) {
+            list[idx] = {
+              id: r.id,
+              title: SecurityService.sanitizeText(r.title),
+              rawTranscript: SecurityService.sanitizeText(r.rawTranscript || ''),
+              story: SecurityService.sanitizeText(r.story),
+              learning: SecurityService.sanitizeText(r.learning),
+              actionCommitment: SecurityService.sanitizeText(r.actionCommitment || ''),
+              summary: SecurityService.sanitizeText(r.summary),
+              category: r.category,
+              tags: Array.isArray(r.tags) ? r.tags : [],
+              audioUri: r.audioUri ?? list[idx].audioUri ?? null,
+              audioDurationSeconds: Math.round(r.audioDurationSeconds || 0),
+              isFavorite: Boolean(r.isFavorite),
+              createdAt: incomingCreatedAt,
+              updatedAt: incomingUpdatedAt,
+            };
+            updated++;
+          }
         } else {
-          list.push({ ...r, backupStatus: 'synced' });
+          list.push({
+            id: r.id,
+            title: SecurityService.sanitizeText(r.title),
+            rawTranscript: SecurityService.sanitizeText(r.rawTranscript || ''),
+            story: SecurityService.sanitizeText(r.story),
+            learning: SecurityService.sanitizeText(r.learning),
+            actionCommitment: SecurityService.sanitizeText(r.actionCommitment || ''),
+            summary: SecurityService.sanitizeText(r.summary),
+            category: r.category,
+            tags: Array.isArray(r.tags) ? r.tags : [],
+            audioUri: r.audioUri || null,
+            audioDurationSeconds: Math.round(r.audioDurationSeconds || 0),
+            isFavorite: Boolean(r.isFavorite),
+            createdAt: incomingCreatedAt,
+            updatedAt: incomingUpdatedAt,
+          });
           imported++;
         }
       }
@@ -471,50 +589,62 @@ export class DatabaseService {
 
     const db = await getDatabase();
     for (const r of reflections) {
-      const existing = await db.getFirstAsync<{ id: string }>('SELECT id FROM reflections WHERE id = ?', [r.id]);
-      const tagsJson = JSON.stringify(r.tags || []);
+      const existing = await this.getReflectionById(r.id);
+      const tagsJson = JSON.stringify(Array.isArray(r.tags) ? r.tags : []);
       const sanitizedTitle = SecurityService.sanitizeText(r.title);
+      const sanitizedTranscript = SecurityService.sanitizeText(r.rawTranscript || '');
       const sanitizedStory = SecurityService.sanitizeText(r.story);
       const sanitizedLearning = SecurityService.sanitizeText(r.learning);
       const sanitizedAction = SecurityService.sanitizeText(r.actionCommitment || '');
       const sanitizedSummary = SecurityService.sanitizeText(r.summary);
+      const duration = Math.round(r.audioDurationSeconds || 0);
+      const createdAt = normalizeIsoTimestamp(r.createdAt);
+      const updatedAt = normalizeIsoTimestamp(r.updatedAt);
 
       if (existing) {
-        await db.runAsync(
-          `UPDATE reflections SET
-            title = ?, raw_transcript = ?, story = ?, learning = ?, action_commitment = ?,
-            summary = ?, category = ?, tags = ?, audio_uri = ?, audio_duration_seconds = ?,
-            is_favorite = ?, created_at = ?, updated_at = ?, backup_status = 'synced'
-          WHERE id = ?`,
-          [
-            sanitizedTitle,
-            r.rawTranscript || '',
-            sanitizedStory,
-            sanitizedLearning,
-            sanitizedAction,
-            sanitizedSummary,
-            r.category,
-            tagsJson,
-            r.audioUri || null,
-            r.audioDurationSeconds || 0,
-            r.isFavorite ? 1 : 0,
-            r.createdAt,
-            r.updatedAt,
-            r.id,
-          ]
-        );
-        updated++;
+        const existingTime = new Date(existing.updatedAt).getTime();
+        const incomingTime = new Date(updatedAt).getTime();
+
+        if (incomingTime >= existingTime) {
+          // Preserve device-local audioUri when incoming cloud record has no audioUri
+          const preservedAudioUri = r.audioUri || existing.audioUri || null;
+
+          await db.runAsync(
+            `UPDATE reflections SET
+              title = ?, raw_transcript = ?, story = ?, learning = ?, action_commitment = ?,
+              summary = ?, category = ?, tags = ?, audio_uri = ?, audio_duration_seconds = ?,
+              is_favorite = ?, created_at = ?, updated_at = ?
+            WHERE id = ?`,
+            [
+              sanitizedTitle,
+              sanitizedTranscript,
+              sanitizedStory,
+              sanitizedLearning,
+              sanitizedAction,
+              sanitizedSummary,
+              r.category,
+              tagsJson,
+              preservedAudioUri,
+              duration,
+              r.isFavorite ? 1 : 0,
+              createdAt,
+              updatedAt,
+              r.id,
+            ]
+          );
+          updated++;
+        }
       } else {
         await db.runAsync(
           `INSERT INTO reflections (
             id, title, raw_transcript, story, learning, action_commitment,
             summary, category, tags, audio_uri, audio_duration_seconds,
-            is_favorite, created_at, updated_at, backup_status
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
+            is_favorite, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             r.id,
             sanitizedTitle,
-            r.rawTranscript || '',
+            sanitizedTranscript,
             sanitizedStory,
             sanitizedLearning,
             sanitizedAction,
@@ -522,10 +652,10 @@ export class DatabaseService {
             r.category,
             tagsJson,
             r.audioUri || null,
-            r.audioDurationSeconds || 0,
+            duration,
             r.isFavorite ? 1 : 0,
-            r.createdAt,
-            r.updatedAt,
+            createdAt,
+            updatedAt,
           ]
         );
         imported++;

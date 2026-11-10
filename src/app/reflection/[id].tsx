@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { AudioPlayerCard } from '../../components/AudioPlayerCard';
 import { DatabaseService } from '../../services/database';
+import { SyncService } from '../../services/syncService';
 import { Reflection } from '../../types/reflection';
 import { Colors, Spacing, Typography, BorderRadius } from '../../constants/theme';
 
@@ -32,6 +33,7 @@ export default function ReflectionDetailScreen() {
   const [editTitle, setEditTitle] = useState<string>('');
   const [editLearning, setEditLearning] = useState<string>('');
   const [editAction, setEditAction] = useState<string>('');
+  const [editSummary, setEditSummary] = useState<string>('');
   const [editStory, setEditStory] = useState<string>('');
 
   const loadReflection = useCallback(async () => {
@@ -43,7 +45,10 @@ export default function ReflectionDetailScreen() {
         setEditTitle(data.title);
         setEditLearning(data.learning);
         setEditAction(data.actionCommitment);
+        setEditSummary(data.summary);
         setEditStory(data.story);
+      } else {
+        setReflection(null);
       }
     } catch (err) {
       console.error('[ReflectionDetail] Error loading reflection:', err);
@@ -54,13 +59,24 @@ export default function ReflectionDetailScreen() {
 
   useEffect(() => {
     loadReflection();
+    const unsubscribe = SyncService.subscribeChanges(() => {
+      loadReflection();
+    });
+    return () => {
+      unsubscribe();
+    };
   }, [loadReflection]);
 
   const handleToggleFavorite = async () => {
     if (!reflection) return;
     try {
-      const newFav = await DatabaseService.toggleFavorite(reflection.id);
-      setReflection({ ...reflection, isFavorite: newFav });
+      const updated = await DatabaseService.toggleFavorite(reflection.id);
+      if (updated) {
+        setReflection(updated);
+        SyncService.pushReflection(updated).catch((e) =>
+          console.warn('[ReflectionDetail] Background push favorite failed:', e)
+        );
+      }
     } catch (err) {
       console.error('[ReflectionDetail] Toggle favorite error:', err);
     }
@@ -78,7 +94,11 @@ export default function ReflectionDetailScreen() {
           onPress: async () => {
             if (!reflection) return;
             try {
-              await DatabaseService.deleteReflection(reflection.id);
+              const deletedId = reflection.id;
+              await DatabaseService.deleteReflection(deletedId);
+              SyncService.deleteReflection(deletedId).catch((e) =>
+                console.warn('[ReflectionDetail] Background cloud delete failed:', e)
+              );
               router.back();
             } catch (err) {
               Alert.alert('ত্রুটি', 'মুছে ফেলতে সমস্যা হয়েছে।');
@@ -104,20 +124,18 @@ export default function ReflectionDetailScreen() {
   const handleSaveEdit = async () => {
     if (!reflection) return;
     try {
-      await DatabaseService.updateReflection(reflection.id, {
+      const updated = await DatabaseService.updateReflection(reflection.id, {
         title: editTitle,
         learning: editLearning,
         actionCommitment: editAction,
+        summary: editSummary,
         story: editStory,
       });
-      setReflection({
-        ...reflection,
-        title: editTitle,
-        learning: editLearning,
-        actionCommitment: editAction,
-        story: editStory,
-      });
+      setReflection(updated);
       setIsEditModalVisible(false);
+      SyncService.pushReflection(updated).catch((e) =>
+        console.warn('[ReflectionDetail] Background push edit failed:', e)
+      );
     } catch (err) {
       Alert.alert('ত্রুটি', 'আপডেট সেভ করতে সমস্যা হয়েছে।');
     }
@@ -344,6 +362,16 @@ export default function ReflectionDetailScreen() {
               multiline
               numberOfLines={3}
               placeholder="ভবিষ্যতে কীভাবে নিজেকে শুধরাবেন?"
+            />
+
+            <Text style={styles.inputLabel}>এক নজরে সারসংক্ষেপ (Summary)</Text>
+            <TextInput
+              style={[styles.textInput, styles.multiInput]}
+              value={editSummary}
+              onChangeText={setEditSummary}
+              multiline
+              numberOfLines={2}
+              placeholder="এক বা দুই বাক্যে সারসংক্ষেপ..."
             />
 
             <Text style={styles.inputLabel}>ঘটনা বা প্রেক্ষাপট (Story)</Text>

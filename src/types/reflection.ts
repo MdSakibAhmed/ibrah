@@ -8,21 +8,11 @@ export interface Reflection {
   summary: string;
   category: string;
   tags: string[];
-  audioUri?: string | null;
-  audioDurationSeconds?: number;
+  audioUri?: string | null; // Device-local playable audio path (only stored locally, not synced to cloud)
+  audioDurationSeconds: number;
   isFavorite: boolean;
-  createdAt: string; // ISO 8601
-  updatedAt: string; // ISO 8601
-  backupStatus?: 'local' | 'synced' | 'pending';
-}
-
-export interface BackupPackage {
-  appVersion: string;
-  exportedAt: string;
-  deviceInfo?: string;
-  totalCount: number;
-  reflections: Reflection[];
-  signature: string; // checksum/verification tag
+  createdAt: string; // ISO 8601 UTC string
+  updatedAt: string; // ISO 8601 UTC string
 }
 
 export interface AIAnalysisResult {
